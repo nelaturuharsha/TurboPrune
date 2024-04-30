@@ -1,0 +1,1 @@
+# lottery-ticket-harness
