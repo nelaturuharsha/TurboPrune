@@ -88,9 +88,10 @@ class Harness:
         self.config = get_current_config()
 
         self.model = self.acquire_model()
-
         
         self.model.to(self.device)
+        
+
         self.model = DDP(self.model, device_ids=[self.rank])
         dls = FFCVImageNet()
         self.train_loader, self.test_loader = dls.train_loader, dls.val_loader
@@ -142,18 +143,40 @@ class Harness:
             else:
                 pruner_method(self.model, er_init)
 
-        self.broadcast_model()
+            self.broadcast_model()
+
 
     def broadcast_model(self):
+        # Ensure all processes reach this point before proceeding
         dist.barrier()
         
+        # Broadcast parameters of the model
         for param in self.model.parameters():
             dist.broadcast(param.data, src=0)
         
+        # Broadcast buffers of the model (e.g., running statistics in BatchNorm)
         for buffer in self.model.buffers():
             dist.broadcast(buffer.data, src=0)
 
+        # Ensure all processes finish broadcasting before proceeding
         dist.barrier()
+
+        # Verify that parameters are identical across all devices
+        local_params = [param.data for param in self.model.parameters()]
+        all_params = [torch.zeros_like(param) for param in local_params]
+
+        # Gather parameters from all processes
+        dist.all_gather(all_params, local_params)
+
+        # Compare parameters across all processes
+        for i in range(dist.get_world_size()):
+            if i != dist.get_rank():
+                for local_param, param in zip(local_params, all_params[i]):
+                    if not torch.allclose(local_param, param):
+                        raise ValueError("Parameters on device {} are not identical!".format(dist.get_rank()))
+
+        print("Parameters on all devices are identical.")
+
 
     @param('prune_params.prune_method')
     def level_pruner(self, prune_method, density):
@@ -164,6 +187,8 @@ class Harness:
                 self.model = pruner_method(self.model, self.train_loader, density)
             else:
                 self.model = pruner_method(self.model, density)
+
+            self.broadcast_model()
     
     def train_one_epoch(self, epoch):
         self.model.train()
@@ -171,10 +196,7 @@ class Harness:
         correct = 0
         total = 0
 
-        if self.rank == 0:
-            tepoch = tqdm.tqdm(self.train_loader, unit='batch', desc=f'Epoch {epoch}')
-        else:
-            tepoch = self.train_loader
+        tepoch = tqdm.tqdm(self.train_loader, unit='batch', desc=f'Epoch {epoch}')
         for inputs, targets in tepoch:
             if self.rank == 0:
                 tepoch.set_description(f'Epoch: {epoch}')
@@ -194,7 +216,6 @@ class Harness:
             _, predicted = outputs.max(1)
             total += targets.size(0)
             correct += predicted.eq(targets).sum().item()
-
         train_loss /= (len(self.train_loader))
         accuracy = 100. * (correct / total)
 
@@ -207,10 +228,7 @@ class Harness:
         total = 0
 
         # Initialize tqdm only on rank 0
-        if self.rank == 0:
-            tloader = tqdm.tqdm(self.test_loader, leave=False, desc='Testing')
-        else:
-            tloader = self.test_loader
+        tloader = tqdm.tqdm(self.test_loader, leave=False, desc='Testing')
         with torch.no_grad():
             for inputs, targets in tloader:
                 inputs, targets = inputs.to(self.device), targets.to(self.device)
@@ -262,6 +280,8 @@ class Harness:
     @param('experiment_params.total_epochs')
     @param('experiment_params.training_type')
     def train_one_level(self, total_epochs, training_type, threshold, rank, world_size):
+        new_table = PrettyTable()
+        new_table.field_names = ["Epoch", "Train Loss", "Test Loss", "Train Acc", "Test Acc"]
         sparsity_level_df = {
             'train_acc': [],
             'test_acc': [],
@@ -273,29 +293,26 @@ class Harness:
         
         for epoch in range(total_epochs):
             train_loss, train_acc = self.train_one_epoch(epoch)
-            #print(train_loss, train_acc)
-            #if dist.get_rank() == 0:
             test_loss, test_acc = self.test()
             train_loss_tensor = torch.tensor(train_loss).to(self.model.device)
             train_acc_tensor = torch.tensor(train_acc).to(self.model.device)
-            #test_loss_tensor = torch.tensor(test_loss).to(self.model.device)
-            #test_acc_tensor = torch.tensor(test_acc).to(self.model.device)
+            test_loss_tensor = torch.tensor(test_loss).to(self.model.device)
+            test_acc_tensor = torch.tensor(test_acc).to(self.model.device)
 
             
             dist.all_reduce(train_loss_tensor, op=dist.ReduceOp.SUM)
             dist.all_reduce(train_acc_tensor, op=dist.ReduceOp.SUM)
-            #dist.all_reduce(test_loss_tensor, op=dist.ReduceOp.SUM)
-            #dist.all_reduce(test_acc_tensor, op=dist.ReduceOp.SUM)
+            dist.all_reduce(test_loss_tensor, op=dist.ReduceOp.SUM)
+            dist.all_reduce(test_acc_tensor, op=dist.ReduceOp.SUM)
 
             train_loss_tensor /= world_size
             train_acc_tensor /= world_size
-            #test_loss_tensor /= world_size
-            #test_acc_tensor /= world_size
+            test_loss_tensor /= world_size
+            test_acc_tensor /= world_size
 
             if rank == 0:
-                new_table = PrettyTable()
-                new_table.field_names = ["Train Loss", "Test Loss", "Train Acc", "Test Acc"]
-                new_table.add_row([train_loss_tensor.item(), test_loss, train_acc_tensor.item(), test_acc])
+
+                new_table.add_row([epoch, train_loss_tensor.item(), test_loss_tensor.item(), train_acc_tensor.item(), test_acc_tensor.item()])
                 print(new_table)
 
                 sparsity_level_df['train_acc'].append(train_acc_tensor.item())
@@ -342,6 +359,7 @@ if __name__ == '__main__':
 
     if config['prune_params.er_method'] != 'just dont':
         thresholds = [1.0 for level in range(30)]
+    #harness.model = torch.compile(harness.model, mode='reduce-overhead')
 
     if rank == 0:
         if not os.path.exists(expt_dir):
@@ -353,7 +371,7 @@ if __name__ == '__main__':
 
         torch.save(harness.model.module.state_dict(), f'{expt_dir}/checkpoints/random_init_start.pt')
         torch.save(harness.optimizer.state_dict(), f'{expt_dir}/artifacts/optimizer.pt')
-
+        
     dist.barrier()
 
     if config['prune_params.er_method'] != 'just dont':

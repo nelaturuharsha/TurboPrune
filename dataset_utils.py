@@ -17,7 +17,7 @@ class FFCVImageNet:
     @param('dataset.num_workers')
     def __init__(self, batch_size, num_workers, ):
         super(FFCVImageNet, self).__init__()
-        data_root = '/home/harsha/v0.1/'
+        data_root = '/home/c02hane/CISPA-projects/ffcv_imagenet-2023/'
 
         IMAGENET_MEAN = np.array([0.485, 0.456, 0.406]) * 255
         IMAGENET_STD = np.array([0.229, 0.224, 0.225]) * 255
@@ -42,7 +42,7 @@ class FFCVImageNet:
 
 
 
-        self.train_loader = Loader(data_root + 'train_500_0.50_90.ffcv', 
+        self.train_loader = Loader(data_root + 'train_500_0.50_90.beton', 
                               batch_size  = batch_size,
                               num_workers = num_workers,
                               order       = OrderOption.RANDOM,
@@ -53,7 +53,7 @@ class FFCVImageNet:
                               distributed = True,
                               )
 
-        self.val_loader = Loader(data_root + 'val_500_0.50_90.ffcv',
+        self.val_loader = Loader(data_root + 'val_500_0.50_90.beton',
                             batch_size  = batch_size,
                             num_workers = num_workers,
                             order       = OrderOption.SEQUENTIAL,

@@ -7,7 +7,7 @@ class ConvMask(nn.Conv2d):
         super().__init__(*args, **kwargs)
 
         self.activation = torch.relu
-        self.mask = torch.ones_like(self.weight).to(self.weight.device)
+        self.register_buffer('mask', torch.ones_like(self.weight))
             
     def forward(self, x):
         
@@ -30,7 +30,7 @@ class LinearMask(nn.Linear):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-        self.mask = torch.ones_like(self.weight).to(self.weight.device)
+        self.register_buffer('mask', torch.ones_like(self.weight))
             
     def forward(self, x):
         
