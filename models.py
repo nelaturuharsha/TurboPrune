@@ -87,18 +87,10 @@ class Bottleneck(nn.Module):
         return out
 
 class ResNet(nn.Module):
-    @param('model_params.first_layer_dense')
-    @param('model_params.last_layer_dense') 
-    def __init__(self, first_layer_dense, last_layer_dense, builder, block, layers, num_classes):
+    def __init__(self, builder, block, layers, num_classes):
         self.inplanes = 64
         super(ResNet, self).__init__()
-        if first_layer_dense:
-            print("FIRST LAYER DENSE!!!!")
-            self.conv1 = nn.Conv2d(
-                3, self.inplanes, kernel_size=7, stride=2, padding=3, bias=False
-            )
-        else:
-            self.conv1 = builder.conv7x7(3, 64, stride=2, first_layer=True)
+        self.conv1 = builder.conv7x7(3, 64, stride=2, first_layer=True)
 
         self.bn1 = builder.batchnorm(64)
         self.relu = builder.activation()
@@ -108,11 +100,8 @@ class ResNet(nn.Module):
         self.layer3 = self._make_layer(builder, block, 256, layers[2], stride=2)
         self.layer4 = self._make_layer(builder, block, 512, layers[3], stride=2)
         self.avgpool = nn.AdaptiveAvgPool2d(1)
-        # self.fc = nn.Linear(512 * block.expansion, num_classes)
-        if last_layer_dense:
-            self.fc = nn.Conv2d(512 * block.expansion, num_classes, 1)
-        else:
-            self.fc = builder.conv1x1(512 * block.expansion, num_classes)
+
+        self.fc = builder.conv1x1(512 * block.expansion, num_classes)
 
     def _make_layer(self, builder, block, planes, blocks, stride=1):
         downsample = None

@@ -27,13 +27,13 @@ class FFCVImageNet:
                             ToTensor(),
                             ToDevice(torch.device('cuda'), non_blocking=True),
                             ToTorchImage(),
-                            NormalizeImage(IMAGENET_MEAN, IMAGENET_STD, np.float32)]
+                            NormalizeImage(IMAGENET_MEAN, IMAGENET_STD, np.float16)]
 
         val_image_pipeline = [CenterCropRGBImageDecoder((256, 256), ratio=DEFAULT_CROP_RATIO),
                               ToTensor(),
                               ToDevice(torch.device('cuda'), non_blocking=True),
                               ToTorchImage(),
-                              NormalizeImage(IMAGENET_MEAN, IMAGENET_STD, np.float32)]
+                              NormalizeImage(IMAGENET_MEAN, IMAGENET_STD, np.float16)]
 
         label_pipeline = [IntDecoder(),
                             ToTensor(),

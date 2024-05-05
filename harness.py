@@ -36,15 +36,12 @@ from torch.cuda.amp import GradScaler, autocast
 
 
 Section('model_params', 'model details').params(
-    pretrained=Param(int, 'is pre-trained? (1/0)', default=0),
     model_name=Param(str, 'model_choice', default='ResNet50', required=True),
     first_layer_type=Param(str, 'layer type'),
     conv_type=Param(And(str, OneOf(['ConvMask'])), required=True),
     bn_type=Param(And(str, OneOf(['LearnedBatchNorm'])), required=True),
     init=Param(And(str, OneOf(['kaiming_normal'])), required=True),
     nonlinearity=Param(And(str, OneOf(['relu', 'leaky_relu'])), required=True),
-    first_layer_dense=Param(bool, 'is first layer dense?', default=False),
-    last_layer_dense=Param(bool, 'last layer dense?', default=False),
     mode=Param(And(str, OneOf(['fan_in'])), required=True),
     scale_fan=Param(bool, 'use scale fan', required=True))
 
@@ -93,11 +90,9 @@ class Harness:
 
         self.config = get_current_config()
 
-        print(self.gpu_id, self.device)
-
         self.model = model.to(self.device)
         self.model = DDP(self.model, device_ids=[self.gpu_id])
-        
+        self.world_size = dist.get_world_size()
 
         self.create_optimizers()
         self.criterion = nn.CrossEntropyLoss()
@@ -128,28 +123,21 @@ class Harness:
         train_loss = 0
         correct = 0
         total = 0
-        print('prog 1')
         tepoch = tqdm.tqdm(self.train_loader, unit='batch', desc=f'Epoch {epoch}')
-        print('prog 2')
         for inputs, targets in tepoch:            
-            print('prog 3')
-            #inputs, targets = inputs.to(self.device), targets.to(self.device)
+            inputs, targets = inputs.to(self.device), targets.to(self.device)
             self.optimizer.zero_grad()
-            print('prog 4')
-            #with autocast(dtype=torch.float16):
-            outputs = self.model(inputs)
-            print('prog 5')
-            loss = self.criterion(outputs, targets)
-            print('prog 6')
-            #self.scaler.scale(loss).backward()
-            #self.scaler.step(self.optimizer)
-            #self.scaler.update()
-            #self.scheduler.step()
+            with autocast(dtype=torch.float16):
+                outputs = self.model(inputs)
+                loss = self.criterion(outputs, targets)
+            self.scaler.scale(loss).backward()
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
+            self.scheduler.step()
             train_loss += loss.item()
             _, predicted = outputs.max(1)
             total += targets.size(0)
             correct += predicted.eq(targets).sum().item()
-            #print(100. * (correc))
         train_loss /= (len(self.train_loader))
         accuracy = 100. * (correct / total)
         
@@ -193,7 +181,7 @@ class Harness:
             'test_loss': []
         }
 
-        #dist.barrier()
+        dist.barrier()
         
         for epoch in range(total_epochs):
             train_loss, train_acc = self.train_one_epoch(epoch)
@@ -203,19 +191,18 @@ class Harness:
             test_loss_tensor = torch.tensor(test_loss).to(self.model.device)
             test_acc_tensor = torch.tensor(test_acc).to(self.model.device)
 
-            '''
+            
             dist.all_reduce(train_loss_tensor, op=dist.ReduceOp.SUM)
             dist.all_reduce(train_acc_tensor, op=dist.ReduceOp.SUM)
             dist.all_reduce(test_loss_tensor, op=dist.ReduceOp.SUM)
             dist.all_reduce(test_acc_tensor, op=dist.ReduceOp.SUM)
 
-            train_loss_tensor /= world_size
-            train_acc_tensor /= world_size
-            test_loss_tensor /= world_size
-            test_acc_tensor /= world_size
+            train_loss_tensor /= self.world_size
+            train_acc_tensor /= self.world_size
+            test_loss_tensor /= self.world_size
+            test_acc_tensor /= self.world_size
 
             if self.gpu_id == 0:
-
                 new_table.add_row([epoch, train_loss_tensor.item(), test_loss_tensor.item(), train_acc_tensor.item(), test_acc_tensor.item()])
                 print(new_table)
 
@@ -239,7 +226,7 @@ class Harness:
             torch.save(self.model.module.state_dict(), f'{self.expt_dir}/checkpoints/model_{threshold}_epoch_final.pt')
 
         dist.barrier()
-            '''
+            
     
 def main(rank, model, world_size, threshold):
     ddp_setup(rank, world_size)
@@ -268,18 +255,27 @@ if __name__ == '__main__':
     config.summary()
 
     garbage_harness = PruneStuff()
-    init_model = deepcopy(garbage_harness.model.cpu())
-    del garbage_harness
+    init_model = garbage_harness.model
     
     prune_rate = 0.2
     num_levels = 30
     thresholds = [(1 - prune_rate) ** level for level in range(num_levels)]
     expt_dir = './experiments/'
 
+    if not os.path.exists(expt_dir):
+        os.makedirs(expt_dir)
+        os.makedirs(f'{expt_dir}/checkpoints')
+        os.makedirs(f'{expt_dir}/metrics')
+        os.makedirs(f'{expt_dir}/metrics/epochwise_metrics')
+        os.makedirs(f'{expt_dir}/artifacts/')
+
+        torch.save(harness.model.module.state_dict(), f'{expt_dir}/checkpoints/random_init_start.pt')
+        torch.save(harness.optimizer.state_dict(), f'{expt_dir}/artifacts/optimizer.pt')
+
+
     world_size = torch.cuda.device_count()
-    threshold = 0.105
-    #for i, threshold in enumerate(thresholds):
-    mp.spawn(main, args=(init_model, world_size, threshold), nprocs=world_size, join=True)
+    for i, threshold in enumerate(thresholds):
+        mp.spawn(main, args=(init_model, world_size, threshold), nprocs=world_size, join=True)
 
     '''torch.save(harness.model.module.state_dict(), f'{expt_dir}/checkpoints/model_level_{i}.pt')
     
