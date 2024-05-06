@@ -10,19 +10,19 @@ model_params:
 dataset:
   num_classes: 1000
   dataset_name: imagenet
-  batch_size: 256 
+  batch_size: 512 
   num_workers: 8
 prune_params:
   prune_rate: 0.2
   er_init: 0.105
-  er_method: er_erk 
+  er_method: just dont 
   prune_method: synflow
 experiment_params:
-  total_epochs: 100
+  epochs_per_level: 90 
   num_levels: 30
   training_type: wr
 optimizer:
   lr: 0.1
-  scheduler_type: CosineLRWarmup
+  scheduler_type: ImageNetLRDropsWarmup
   warmup_epochs: 10
   lr_min: 0.01

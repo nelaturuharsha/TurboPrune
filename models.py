@@ -4,9 +4,7 @@ from utils.builder import get_builder
 from fastargs import get_current_config
 from fastargs.decorators import param
 import torch.nn.functional as F
-get_current_config()
 
-# BasicBlock {{{
 class BasicBlock(nn.Module):
     M = 2
     expansion = 1
@@ -43,10 +41,6 @@ class BasicBlock(nn.Module):
 
         return out
 
-
-# BasicBlock }}}
-
-# Bottleneck {{{
 class Bottleneck(nn.Module):
     M = 3
     expansion = 4
@@ -87,18 +81,10 @@ class Bottleneck(nn.Module):
         return out
 
 class ResNet(nn.Module):
-    @param('model_params.first_layer_dense')
-    @param('model_params.last_layer_dense') 
-    def __init__(self, first_layer_dense, last_layer_dense, builder, block, layers, num_classes):
+    def __init__(self, builder, block, layers, num_classes):
         self.inplanes = 64
         super(ResNet, self).__init__()
-        if first_layer_dense:
-            print("FIRST LAYER DENSE!!!!")
-            self.conv1 = nn.Conv2d(
-                3, self.inplanes, kernel_size=7, stride=2, padding=3, bias=False
-            )
-        else:
-            self.conv1 = builder.conv7x7(3, 64, stride=2, first_layer=True)
+        self.conv1 = builder.conv7x7(3, 64, stride=2, first_layer=True)
 
         self.bn1 = builder.batchnorm(64)
         self.relu = builder.activation()
@@ -108,11 +94,8 @@ class ResNet(nn.Module):
         self.layer3 = self._make_layer(builder, block, 256, layers[2], stride=2)
         self.layer4 = self._make_layer(builder, block, 512, layers[3], stride=2)
         self.avgpool = nn.AdaptiveAvgPool2d(1)
-        # self.fc = nn.Linear(512 * block.expansion, num_classes)
-        if last_layer_dense:
-            self.fc = nn.Conv2d(512 * block.expansion, num_classes, 1)
-        else:
-            self.fc = builder.conv1x1(512 * block.expansion, num_classes)
+
+        self.fc = builder.conv1x1(512 * block.expansion, num_classes)
 
     def _make_layer(self, builder, block, planes, blocks, stride=1):
         downsample = None
@@ -154,10 +137,8 @@ class ResNet(nn.Module):
         return x
 
 
-# ResNet }}}
 def ResNet18(num_classes=1000):
-    # TODO: pretrained
-    return ResNet(get_builder(), BasicBlock, [2, 2, 2, 2], num_classes)
+    return ResNet(builder=get_builder(), block=BasicBlock, layers=[2, 2, 2, 2], num_classes=num_classes)
 
 def ResNet50(num_classes=1000):
     return ResNet(builder=get_builder(), block=Bottleneck, layers=[3, 4, 6, 3], num_classes=num_classes)

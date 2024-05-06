@@ -7,6 +7,7 @@ import pandas as pd
 from argparse import ArgumentParser
 from prettytable import PrettyTable
 import tqdm
+from copy import deepcopy
 
 ## torch
 import torch
@@ -15,13 +16,15 @@ from torch.distributed import init_process_group, destroy_process_group
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch import optim
+import torch.multiprocessing as mp
 ## torchvision
 
 ## file-based imports
 import models
-import pruners
+import pruning_utils
 from dataset_utils import FFCVImageNet
 import schedulers
+from pruning_utils import *
 
 ## fastargs
 import fastargs
@@ -32,90 +35,33 @@ from fastargs.validation import And, OneOf
 from torch.cuda.amp import GradScaler, autocast
 
 
-
-Section('model_params', 'model details').params(
-    pretrained=Param(int, 'is pre-trained? (1/0)', default=0),
-    model_name=Param(str, 'model_choice', default='ResNet50', required=True),
-    first_layer_type=Param(str, 'layer type'),
-    conv_type=Param(And(str, OneOf(['ConvMask'])), required=True),
-    bn_type=Param(And(str, OneOf(['LearnedBatchNorm'])), required=True),
-    init=Param(And(str, OneOf(['kaiming_normal'])), required=True),
-    nonlinearity=Param(And(str, OneOf(['relu', 'leaky_relu'])), required=True),
-    first_layer_dense=Param(bool, 'is first layer dense?', default=False),
-    last_layer_dense=Param(bool, 'last layer dense?', default=False),
-    mode=Param(And(str, OneOf(['fan_in'])), required=True),
-    scale_fan=Param(bool, 'use scale fan', required=True))
-
-Section('dataset', 'dataset configuration').params(
-    num_classes=Param(And(int, OneOf([1000])), 'number of classes',required=True),
-    batch_size=Param(int, 'batch size', default=512),
-    num_workers=Param(int, 'num_workers', default=8))
-
-Section('prune_params', 'pruning configuration').params(
-    prune_rate=Param(float, 'pruning percentage',required=True),
-    er_init=Param(float, 'sparse init percentage/target', required=True),
-    er_method=Param(And(OneOf(['er_erk', 'er_balanced', 'synflow', 'snip', 'just dont'])), required=True),
-    prune_method=Param(And(OneOf(['random_erk', 'random_balanced', 'synflow', 'snip', 'mag']))))
-
-Section('experiment_params', 'parameters to train model').params(
-    total_epochs=Param(int, 'number of epochs per level', required=True),
-    num_levels=Param(int, 'number of pruning levels', required=True),
-    training_type=Param(And(str, OneOf(['imp', 'wr', 'lrr'])), required=True))
-
-
-Section('dataset', 'data related stuff').params(
-    dataset_name=Param(str, 'Name of dataset', required=True),
-    batch_size=Param(int, 'batch size', default=512),
-    num_workers=Param(int, 'num_workers', default=8))
-
-Section('optimizer', 'data related stuff').params(
-    lr=Param(float, 'Name of dataset', required=True),
-    num_workers=Param(int, 'num_workers', default=8),
-    momentum=Param(float, 'momentum', default=0.9),
-    weight_decay=Param(float, 'weight decay', default=1e-4),
-    warmup_epochs=Param(int, 'warmup length', default=10),
-    scheduler_type=Param(And(str, OneOf(['MultiStepLRWarmup', 'ImageNetLRDropsWarmup', 'CosineLRWarmup'])), required=True),
-    lr_min=Param(float, 'minimum learning rate for cosine', default=0.01))
-
+def ddp_setup(rank, world_size):
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12345'
+    init_process_group('nccl', rank=rank, world_size=world_size)
 
 class Harness:
-    def __init__(self):
-        self.ddp_setup()
-        self.rank = dist.get_rank()
-        self.world_size = dist.get_world_size()
-        self.device = torch.device(f'cuda:{self.rank}')
+    def __init__(self, gpu_id, expt_dir, model=None):
+        self.gpu_id = gpu_id
+        self.device = torch.device(f'cuda:{self.gpu_id}')
+        dls = FFCVImageNet(distributed=True)
+        self.train_loader, self.test_loader = dls.train_loader, dls.val_loader
 
         self.config = get_current_config()
 
-        self.model = self.acquire_model()
-        
-        self.model.to(self.device)
-        
+        self.model = model.to(self.device)
+        self.model = DDP(self.model, device_ids=[self.gpu_id])
+        self.world_size = dist.get_world_size()
 
-        self.model = DDP(self.model, device_ids=[self.rank])
-        dls = FFCVImageNet()
-        self.train_loader, self.test_loader = dls.train_loader, dls.val_loader
         self.create_optimizers()
-        self.criterion = nn.NLLLoss()
+        self.criterion = nn.CrossEntropyLoss()
         self.data_df = {}
         self.data_df['sparsity'] = []
         self.data_df['test_acc'] = []
         self.data_df['max_test_acc'] = []
-        self.expt_dir = './experiments/'
+        self.expt_dir = expt_dir 
         self.scaler = GradScaler()
 
-    def ddp_setup(self):
-        init_process_group(backend='nccl')
-    
-    def cleanup(self):
-        dist.destroy_process_group()
-
-    @param("model_params.model_name")
-    @param("dataset.num_classes")
-    def acquire_model(self, model_name, num_classes):
-        model_cls = getattr(models, model_name)
-        model = model_cls(num_classes=num_classes)
-        return model
 
     @param('optimizer.lr')
     @param('optimizer.momentum')
@@ -130,84 +76,19 @@ class Harness:
 
         scheduler = getattr(schedulers, scheduler_type)
         self.scheduler = scheduler(optimizer=self.optimizer)
-       
-    @param('prune_params.er_method')
-    @param('prune_params.er_init')
-    def prune_at_initialization(self, er_method, er_init):
-        if dist.get_rank() == 0:
-            er_method_name = f'prune_{er_method}'
-            pruner_method = getattr(pruners, er_method_name)
-
-            if er_method in {'synflow', 'snip'}:
-                self.model = pruner_method(self.model, self.train_loader, er_init)
-            else:
-                pruner_method(self.model, er_init)
-
-            self.broadcast_model()
-
-
-    def broadcast_model(self):
-        # Ensure all processes reach this point before proceeding
-        dist.barrier()
-        
-        # Broadcast parameters of the model
-        for param in self.model.parameters():
-            dist.broadcast(param.data, src=0)
-        
-        # Broadcast buffers of the model (e.g., running statistics in BatchNorm)
-        for buffer in self.model.buffers():
-            dist.broadcast(buffer.data, src=0)
-
-        # Ensure all processes finish broadcasting before proceeding
-        dist.barrier()
-
-        # Verify that parameters are identical across all devices
-        local_params = [param.data for param in self.model.parameters()]
-        all_params = [torch.zeros_like(param) for param in local_params]
-
-        # Gather parameters from all processes
-        dist.all_gather(all_params, local_params)
-
-        # Compare parameters across all processes
-        for i in range(dist.get_world_size()):
-            if i != dist.get_rank():
-                for local_param, param in zip(local_params, all_params[i]):
-                    if not torch.allclose(local_param, param):
-                        raise ValueError("Parameters on device {} are not identical!".format(dist.get_rank()))
-
-        print("Parameters on all devices are identical.")
-
-
-    @param('prune_params.prune_method')
-    def level_pruner(self, prune_method, density):
-        if dist.get_rank() == 0:
-            prune_method_name = f'prune_{prune_method}'
-            pruner_method = getattr(pruners, prune_method_name)
-            if prune_method in {'synflow', 'snip'}:
-                self.model = pruner_method(self.model, self.train_loader, density)
-            else:
-                self.model = pruner_method(self.model, density)
-
-            self.broadcast_model()
     
     def train_one_epoch(self, epoch):
         self.model.train()
         train_loss = 0
         correct = 0
         total = 0
-
         tepoch = tqdm.tqdm(self.train_loader, unit='batch', desc=f'Epoch {epoch}')
-        for inputs, targets in tepoch:
-            if self.rank == 0:
-                tepoch.set_description(f'Epoch: {epoch}')
-            
+        for inputs, targets in tepoch:            
             inputs, targets = inputs.to(self.device), targets.to(self.device)
             self.optimizer.zero_grad()
-
-            with autocast(dtype=torch.float16):
+            with autocast(dtype=torch.bfloat16):
                 outputs = self.model(inputs)
                 loss = self.criterion(outputs, targets)
-
             self.scaler.scale(loss).backward()
             self.scaler.step(self.optimizer)
             self.scaler.update()
@@ -218,7 +99,7 @@ class Harness:
             correct += predicted.eq(targets).sum().item()
         train_loss /= (len(self.train_loader))
         accuracy = 100. * (correct / total)
-
+        
         return train_loss, accuracy
 
     def test(self):
@@ -232,7 +113,7 @@ class Harness:
         with torch.no_grad():
             for inputs, targets in tloader:
                 inputs, targets = inputs.to(self.device), targets.to(self.device)
-                with autocast(dtype=torch.float16):
+                with autocast(dtype=torch.bfloat16):
                     outputs = self.model(inputs)
                     loss = self.criterion(outputs, targets)
                 
@@ -246,6 +127,64 @@ class Harness:
 
         return test_loss, accuracy
 
+  
+    @param('experiment_params.epochs_per_level')
+    @param('experiment_params.training_type')
+    def train_one_level(self, epochs_per_level, training_type, threshold):
+        new_table = PrettyTable()
+        new_table.field_names = ["Epoch", "Train Loss", "Test Loss", "Train Acc", "Test Acc"]
+        sparsity_level_df = {
+            'train_acc': [],
+            'test_acc': [],
+            'train_loss': [],
+            'test_loss': []
+        }
+
+        dist.barrier()
+        
+        for epoch in range(epochs_per_level):
+            train_loss, train_acc = self.train_one_epoch(epoch)
+            test_loss, test_acc = self.test()
+            train_loss_tensor = torch.tensor(train_loss).to(self.model.device)
+            train_acc_tensor = torch.tensor(train_acc).to(self.model.device)
+            test_loss_tensor = torch.tensor(test_loss).to(self.model.device)
+            test_acc_tensor = torch.tensor(test_acc).to(self.model.device)
+
+            
+            dist.all_reduce(train_loss_tensor, op=dist.ReduceOp.SUM)
+            dist.all_reduce(train_acc_tensor, op=dist.ReduceOp.SUM)
+            dist.all_reduce(test_loss_tensor, op=dist.ReduceOp.SUM)
+            dist.all_reduce(test_acc_tensor, op=dist.ReduceOp.SUM)
+
+            train_loss_tensor /= self.world_size
+            train_acc_tensor /= self.world_size
+            test_loss_tensor /= self.world_size
+            test_acc_tensor /= self.world_size
+
+            if self.gpu_id == 0:
+                new_table.add_row([epoch, train_loss_tensor.item(), test_loss_tensor.item(), train_acc_tensor.item(), test_acc_tensor.item()])
+                print(new_table)
+
+                sparsity_level_df['train_acc'].append(train_acc_tensor.item())
+                sparsity_level_df['test_acc'].append(test_acc)
+                sparsity_level_df['train_loss'].append(train_loss_tensor.item())
+                sparsity_level_df['test_loss'].append(test_loss)
+
+                save_matching = (threshold == 1.0) and (training_type == 'wr') and (epoch == 9)
+                if save_matching and self.gpu_id == 0:
+                    checkpoint_path = f"{self.expt_dir}/checkpoints/model_{self.config['optimizer.warmup_epochs']}.pt"
+                    torch.save(self.model.module.state_dict(), checkpoint_path)
+
+        if self.gpu_id == 0:
+            pd.DataFrame(sparsity_level_df).to_csv(f'{self.expt_dir}/metrics/epochwise_metrics/level_{threshold}_metrics.csv')
+            sparsity = self.compute_sparsity(self.model)
+            self.data_df['sparsity'].append(sparsity)
+            self.data_df['text_acc'].append(test_acc_tensor.item())
+            self.data_df['max_test_acc'].append(max(sparsity_level_df['test_acc']))
+
+            #torch.save(self.model.module.state_dict(), f'{self.expt_dir}/checkpoints/model_{threshold}_epoch_final.pt')
+
+        dist.barrier()
 
     def reset_weights(self, init=False):
         if init:
@@ -274,127 +213,75 @@ class Harness:
         model_dict = self.model.state_dict()
 
         model_dict.update(original_weights)
-        self.model.load_state_dict(model_dict) 
-
-  
-    @param('experiment_params.total_epochs')
-    @param('experiment_params.training_type')
-    def train_one_level(self, total_epochs, training_type, threshold, rank, world_size):
-        new_table = PrettyTable()
-        new_table.field_names = ["Epoch", "Train Loss", "Test Loss", "Train Acc", "Test Acc"]
-        sparsity_level_df = {
-            'train_acc': [],
-            'test_acc': [],
-            'train_loss': [],
-            'test_loss': []
-        }
-
-        dist.barrier()
-        
-        for epoch in range(total_epochs):
-            train_loss, train_acc = self.train_one_epoch(epoch)
-            test_loss, test_acc = self.test()
-            train_loss_tensor = torch.tensor(train_loss).to(self.model.device)
-            train_acc_tensor = torch.tensor(train_acc).to(self.model.device)
-            test_loss_tensor = torch.tensor(test_loss).to(self.model.device)
-            test_acc_tensor = torch.tensor(test_acc).to(self.model.device)
-
+        self.model.load_state_dict(model_dict)
             
-            dist.all_reduce(train_loss_tensor, op=dist.ReduceOp.SUM)
-            dist.all_reduce(train_acc_tensor, op=dist.ReduceOp.SUM)
-            dist.all_reduce(test_loss_tensor, op=dist.ReduceOp.SUM)
-            dist.all_reduce(test_acc_tensor, op=dist.ReduceOp.SUM)
-
-            train_loss_tensor /= world_size
-            train_acc_tensor /= world_size
-            test_loss_tensor /= world_size
-            test_acc_tensor /= world_size
-
-            if rank == 0:
-
-                new_table.add_row([epoch, train_loss_tensor.item(), test_loss_tensor.item(), train_acc_tensor.item(), test_acc_tensor.item()])
-                print(new_table)
-
-                sparsity_level_df['train_acc'].append(train_acc_tensor.item())
-                sparsity_level_df['test_acc'].append(test_acc)
-                sparsity_level_df['train_loss'].append(train_loss_tensor.item())
-                sparsity_level_df['test_loss'].append(test_loss)
-
-                save_matching = (threshold == 1.0) and (training_type == 'wr') and (epoch == 9)
-                if save_matching and rank == 0:
-                    checkpoint_path = f'{self.expt_dir}/checkpoints/model_{threshold}_epoch_{epoch}.pt'
-                    torch.save(self.model.module.state_dict(), checkpoint_path)
-
-        if rank == 0:
-            pd.DataFrame(sparsity_level_df).to_csv(f'{self.expt_dir}/metrics/epochwise_metrics/level_{threshold}_metrics.csv')
-            sparsity = self.compute_sparsity(self.model)
-            self.data_df['sparsity'].append(sparsity)
-            self.data_df['text_acc'].append(test_acc_tensor.item())
-            self.data_df['max_test_acc'].append(max(sparsity_level_df['test_acc']))
-
-            torch.save(self.model.module.state_dict(), f'{self.expt_dir}/checkpoints/model_{threshold}_epoch_final.pt')
-
-        dist.barrier()
-
-if __name__ == '__main__':
-
+    
+def main(rank, model, world_size, threshold, level):
+    expt_dir = './experiments/'
+    ddp_setup(rank, world_size)
     config = get_current_config()
     parser = ArgumentParser()
     config.augment_argparse(parser)
     config.collect_argparse_args(parser)
-    config.validate(mode='stderr')
-    
-    
 
-    harness = Harness()
+    config.validate(mode='stderr')
+
+    harness = Harness(gpu_id=rank, model=model, expt_dir=expt_dir)
+    if rank == 0:
+        torch.save(harness.optimizer.state_dict(), f'{expt_dir}/artifacts/optimizer.pt')
+
+    harness.train_one_level(threshold=threshold)
+
+    if rank == 0:
+        torch.save(harness.model.module.state_dict(), f'{expt_dir}/checkpoints/model_level_{i}.pt')
+    
+        if config['experiment_params.training_type'] == 'imp':
+            harness.reset_weights(init=True)
+        elif config['experiment_params.training_type'] == 'wr':
+            harness.reset_weights()
+
+        harness.data_df.to_csv(f'{expt_dir}/metrics/summary.csv')
+        torch.save(harness.model.state_dict(), f'{expt_dir}/checkpoints/model_level_{level}.pt') 
+
+    destroy_process_group()
+
+
+if __name__ == '__main__':
+    config = get_current_config()
+    parser = ArgumentParser()
+    config.augment_argparse(parser)
+    config.collect_argparse_args(parser)
+
+    config.validate(mode='stderr')
+    config.summary()
+
+    garbage_harness = pruning_utils.PruningStuff()
+    init_model = garbage_harness.model
+    
     prune_rate = 0.2
     num_levels = 30
     thresholds = [(1 - prune_rate) ** level for level in range(num_levels)]
     expt_dir = './experiments/'
+
+    if not os.path.exists(expt_dir):
+        os.makedirs(expt_dir)
+        os.makedirs(f'{expt_dir}/checkpoints')
+        os.makedirs(f'{expt_dir}/metrics')
+        os.makedirs(f'{expt_dir}/metrics/epochwise_metrics')
+        os.makedirs(f'{expt_dir}/artifacts/')
+
+    torch.save(init_model.state_dict(), f'{expt_dir}/checkpoints/random_init_start.pt')
     
-    rank = dist.get_rank()
-    if rank == 0:
-        config.summary()
-
-
-    if config['prune_params.er_method'] != 'just dont':
-        thresholds = [1.0 for level in range(30)]
-    #harness.model = torch.compile(harness.model, mode='reduce-overhead')
-
-    if rank == 0:
-        if not os.path.exists(expt_dir):
-            os.makedirs(expt_dir)
-            os.makedirs(f'{expt_dir}/checkpoints')
-            os.makedirs(f'{expt_dir}/metrics')
-            os.makedirs(f'{expt_dir}/metrics/epochwise_metrics')
-            os.makedirs(f'{expt_dir}/artifacts/')
-
-        torch.save(harness.model.module.state_dict(), f'{expt_dir}/checkpoints/random_init_start.pt')
-        torch.save(harness.optimizer.state_dict(), f'{expt_dir}/artifacts/optimizer.pt')
-        
-    dist.barrier()
-
-    if config['prune_params.er_method'] != 'just dont':
-        harness.prune_at_initialization()
-
-    dist.barrier()
-
+    world_size = torch.cuda.device_count()
     for i, threshold in enumerate(thresholds):
-        harness.create_optimizers()
-        if threshold != 1.0 and rank == 0:
-            harness.level_pruner(threshold)
+        mp.spawn(main, args=(init_model, world_size, threshold, i), nprocs=world_size)
+        
+        if threshold != 1.0:
+            prune_harness = PrunerStuff().load_from_ckpt(f'{expt_dir}/checkpoints/model_level_{i-1}.pt')
+            prune_harnes.level_pruner(density=threshold)
+        
 
-        harness.train_one_level(threshold=threshold, rank=rank, world_size=2)
 
-        if rank == 0: 
-            torch.save(harness.model.module.state_dict(), f'{expt_dir}/checkpoints/model_level_{i}.pt')
-            
-            if config['experiment_params.training_type'] == 'imp':
-                harness.reset_weights(init=True)
-            elif config['experiment_params.training_type'] == 'wr':
-                harness.reset_weights()
 
-        if rank == 0:
-            harness.data_df.to_csv(f'{expt_dir}/metrics/summary.csv')
+    
 
-    dist.destroy_process_group()
