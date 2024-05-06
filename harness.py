@@ -21,10 +21,10 @@ import torch.multiprocessing as mp
 
 ## file-based imports
 import models
-import pruners
+import pruning_utils
 from dataset_utils import FFCVImageNet
 import schedulers
-from garbage import *
+from pruning_utils import *
 
 ## fastargs
 import fastargs
@@ -35,54 +35,13 @@ from fastargs.validation import And, OneOf
 from torch.cuda.amp import GradScaler, autocast
 
 
-Section('model_params', 'model details').params(
-    model_name=Param(str, 'model_choice', default='ResNet50', required=True),
-    first_layer_type=Param(str, 'layer type'),
-    conv_type=Param(And(str, OneOf(['ConvMask'])), required=True),
-    bn_type=Param(And(str, OneOf(['LearnedBatchNorm'])), required=True),
-    init=Param(And(str, OneOf(['kaiming_normal'])), required=True),
-    nonlinearity=Param(And(str, OneOf(['relu', 'leaky_relu'])), required=True),
-    mode=Param(And(str, OneOf(['fan_in'])), required=True),
-    scale_fan=Param(bool, 'use scale fan', required=True))
-
-Section('dataset', 'dataset configuration').params(
-    num_classes=Param(And(int, OneOf([1000])), 'number of classes',required=True),
-    batch_size=Param(int, 'batch size', default=512),
-    num_workers=Param(int, 'num_workers', default=8))
-
-Section('prune_params', 'pruning configuration').params(
-    prune_rate=Param(float, 'pruning percentage',required=True),
-    er_init=Param(float, 'sparse init percentage/target', required=True),
-    er_method=Param(And(OneOf(['er_erk', 'er_balanced', 'synflow', 'snip', 'just dont'])), required=True),
-    prune_method=Param(And(OneOf(['random_erk', 'random_balanced', 'synflow', 'snip', 'mag']))))
-
-Section('experiment_params', 'parameters to train model').params(
-    total_epochs=Param(int, 'number of epochs per level', required=True),
-    num_levels=Param(int, 'number of pruning levels', required=True),
-    training_type=Param(And(str, OneOf(['imp', 'wr', 'lrr'])), required=True))
-
-
-Section('dataset', 'data related stuff').params(
-    dataset_name=Param(str, 'Name of dataset', required=True),
-    batch_size=Param(int, 'batch size', default=512),
-    num_workers=Param(int, 'num_workers', default=8))
-
-Section('optimizer', 'data related stuff').params(
-    lr=Param(float, 'Name of dataset', required=True),
-    num_workers=Param(int, 'num_workers', default=8),
-    momentum=Param(float, 'momentum', default=0.9),
-    weight_decay=Param(float, 'weight decay', default=1e-4),
-    warmup_epochs=Param(int, 'warmup length', default=10),
-    scheduler_type=Param(And(str, OneOf(['MultiStepLRWarmup', 'ImageNetLRDropsWarmup', 'CosineLRWarmup'])), required=True),
-    lr_min=Param(float, 'minimum learning rate for cosine', default=0.01))
-
 def ddp_setup(rank, world_size):
     os.environ['MASTER_ADDR'] = 'localhost'
     os.environ['MASTER_PORT'] = '12345'
     init_process_group('nccl', rank=rank, world_size=world_size)
 
 class Harness:
-    def __init__(self, gpu_id, model=None):
+    def __init__(self, gpu_id, expt_dir, model=None):
         self.gpu_id = gpu_id
         self.device = torch.device(f'cuda:{self.gpu_id}')
         dls = FFCVImageNet(distributed=True)
@@ -100,7 +59,7 @@ class Harness:
         self.data_df['sparsity'] = []
         self.data_df['test_acc'] = []
         self.data_df['max_test_acc'] = []
-        self.expt_dir = './experiments/'
+        self.expt_dir = expt_dir 
         self.scaler = GradScaler()
 
 
@@ -127,7 +86,7 @@ class Harness:
         for inputs, targets in tepoch:            
             inputs, targets = inputs.to(self.device), targets.to(self.device)
             self.optimizer.zero_grad()
-            with autocast(dtype=torch.float16):
+            with autocast(dtype=torch.bfloat16):
                 outputs = self.model(inputs)
                 loss = self.criterion(outputs, targets)
             self.scaler.scale(loss).backward()
@@ -154,7 +113,7 @@ class Harness:
         with torch.no_grad():
             for inputs, targets in tloader:
                 inputs, targets = inputs.to(self.device), targets.to(self.device)
-                with autocast(dtype=torch.float16):
+                with autocast(dtype=torch.bfloat16):
                     outputs = self.model(inputs)
                     loss = self.criterion(outputs, targets)
                 
@@ -169,9 +128,9 @@ class Harness:
         return test_loss, accuracy
 
   
-    @param('experiment_params.total_epochs')
+    @param('experiment_params.epochs_per_level')
     @param('experiment_params.training_type')
-    def train_one_level(self, total_epochs, training_type, threshold):
+    def train_one_level(self, epochs_per_level, training_type, threshold):
         new_table = PrettyTable()
         new_table.field_names = ["Epoch", "Train Loss", "Test Loss", "Train Acc", "Test Acc"]
         sparsity_level_df = {
@@ -183,7 +142,7 @@ class Harness:
 
         dist.barrier()
         
-        for epoch in range(total_epochs):
+        for epoch in range(epochs_per_level):
             train_loss, train_acc = self.train_one_epoch(epoch)
             test_loss, test_acc = self.test()
             train_loss_tensor = torch.tensor(train_loss).to(self.model.device)
@@ -213,7 +172,7 @@ class Harness:
 
                 save_matching = (threshold == 1.0) and (training_type == 'wr') and (epoch == 9)
                 if save_matching and self.gpu_id == 0:
-                    checkpoint_path = f'{self.expt_dir}/checkpoints/model_{threshold}_epoch_{epoch}.pt'
+                    checkpoint_path = f"{self.expt_dir}/checkpoints/model_{self.config['optimizer.warmup_epochs']}.pt"
                     torch.save(self.model.module.state_dict(), checkpoint_path)
 
         if self.gpu_id == 0:
@@ -223,25 +182,67 @@ class Harness:
             self.data_df['text_acc'].append(test_acc_tensor.item())
             self.data_df['max_test_acc'].append(max(sparsity_level_df['test_acc']))
 
-            torch.save(self.model.module.state_dict(), f'{self.expt_dir}/checkpoints/model_{threshold}_epoch_final.pt')
+            #torch.save(self.model.module.state_dict(), f'{self.expt_dir}/checkpoints/model_{threshold}_epoch_final.pt')
 
         dist.barrier()
+
+    def reset_weights(self, init=False):
+        if init:
+            original_dict = torch.load(f'{self.expt_dir}/checkpoints/model_init.pt')
+        else:
+            original_dict = torch.load(f"{self.expt_dir}/checkpoints/model_{self.config['optimizer.warmup_epochs']}.pt")
+        original_weights = dict(filter(lambda v: (v[0].endswith(('.weight', '.bias'))), original_dict.items()))
+        model_dict = self.model.state_dict()
+
+        model_dict.update(original_weights)
+        self.model.load_state_dict(model_dict)
+
+        optimizer.load_state_dict(torch.load(f'{self.expt_dir}/artifacts/optimizer.pt'))
+
+    def reset_only_weights(self, ckpt_name):
+        original_dict = torch.load(f"{self.expt_dir}/checkpoints/{ckpt_name}.pt")
+        original_weights = dict(filter(lambda v: (v[0].endswith(('.weight', '.bias'))), original_dict.items()))
+        model_dict = self.model.state_dict()
+
+        model_dict.update(original_weights)
+        self.model.load_state_dict(model_dict)
+
+    def reset_only_masks(self, ckpt_name):
+        original_dict = torch.load(f"{self.expt_dir}/checkpoints/{ckpt_name}.pt")
+        original_weights = dict(filter(lambda v: (v[0].endswith(('.mask'))), original_dict.items()))
+        model_dict = self.model.state_dict()
+
+        model_dict.update(original_weights)
+        self.model.load_state_dict(model_dict)
             
     
-def main(rank, model, world_size, threshold):
+def main(rank, model, world_size, threshold, level):
+    expt_dir = './experiments/'
     ddp_setup(rank, world_size)
-    print('rank', rank)
     config = get_current_config()
     parser = ArgumentParser()
     config.augment_argparse(parser)
     config.collect_argparse_args(parser)
 
     config.validate(mode='stderr')
-    if rank == 0:
-        config.summary()
 
-    harness = Harness(gpu_id=rank, model=model)
+    harness = Harness(gpu_id=rank, model=model, expt_dir=expt_dir)
+    if rank == 0:
+        torch.save(harness.optimizer.state_dict(), f'{expt_dir}/artifacts/optimizer.pt')
+
     harness.train_one_level(threshold=threshold)
+
+    if rank == 0:
+        torch.save(harness.model.module.state_dict(), f'{expt_dir}/checkpoints/model_level_{i}.pt')
+    
+        if config['experiment_params.training_type'] == 'imp':
+            harness.reset_weights(init=True)
+        elif config['experiment_params.training_type'] == 'wr':
+            harness.reset_weights()
+
+        harness.data_df.to_csv(f'{expt_dir}/metrics/summary.csv')
+        torch.save(harness.model.state_dict(), f'{expt_dir}/checkpoints/model_level_{level}.pt') 
+
     destroy_process_group()
 
 
@@ -254,7 +255,7 @@ if __name__ == '__main__':
     config.validate(mode='stderr')
     config.summary()
 
-    garbage_harness = PruneStuff()
+    garbage_harness = pruning_utils.PruningStuff()
     init_model = garbage_harness.model
     
     prune_rate = 0.2
@@ -269,20 +270,18 @@ if __name__ == '__main__':
         os.makedirs(f'{expt_dir}/metrics/epochwise_metrics')
         os.makedirs(f'{expt_dir}/artifacts/')
 
-        torch.save(harness.model.module.state_dict(), f'{expt_dir}/checkpoints/random_init_start.pt')
-        torch.save(harness.optimizer.state_dict(), f'{expt_dir}/artifacts/optimizer.pt')
-
-
+    torch.save(init_model.state_dict(), f'{expt_dir}/checkpoints/random_init_start.pt')
+    
     world_size = torch.cuda.device_count()
     for i, threshold in enumerate(thresholds):
-        mp.spawn(main, args=(init_model, world_size, threshold), nprocs=world_size, join=True)
+        mp.spawn(main, args=(init_model, world_size, threshold, i), nprocs=world_size)
+        
+        if threshold != 1.0:
+            prune_harness = PrunerStuff().load_from_ckpt(f'{expt_dir}/checkpoints/model_level_{i-1}.pt')
+            prune_harnes.level_pruner(density=threshold)
+        
 
-    '''torch.save(harness.model.module.state_dict(), f'{expt_dir}/checkpoints/model_level_{i}.pt')
+
+
     
-    if config['experiment_params.training_type'] == 'imp':
-        harness.reset_weights(init=True)
-    elif config['experiment_params.training_type'] == 'wr':
-        harness.reset_weights()
-
-    harness.data_df.to_csv(f'{expt_dir}/metrics/summary.csv')'''
 

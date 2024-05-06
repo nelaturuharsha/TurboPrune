@@ -4,9 +4,7 @@ from utils.builder import get_builder
 from fastargs import get_current_config
 from fastargs.decorators import param
 import torch.nn.functional as F
-get_current_config()
 
-# BasicBlock {{{
 class BasicBlock(nn.Module):
     M = 2
     expansion = 1
@@ -43,10 +41,6 @@ class BasicBlock(nn.Module):
 
         return out
 
-
-# BasicBlock }}}
-
-# Bottleneck {{{
 class Bottleneck(nn.Module):
     M = 3
     expansion = 4
@@ -143,10 +137,8 @@ class ResNet(nn.Module):
         return x
 
 
-# ResNet }}}
 def ResNet18(num_classes=1000):
-    # TODO: pretrained
-    return ResNet(get_builder(), BasicBlock, [2, 2, 2, 2], num_classes)
+    return ResNet(builder=get_builder(), block=BasicBlock, layers=[2, 2, 2, 2], num_classes=num_classes)
 
 def ResNet50(num_classes=1000):
     return ResNet(builder=get_builder(), block=Bottleneck, layers=[3, 4, 6, 3], num_classes=num_classes)
