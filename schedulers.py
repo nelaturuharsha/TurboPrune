@@ -25,13 +25,13 @@ class LRScheduler:
         raise NotImplementedError
 
 class CosineLRWarmup(LRScheduler):
-    @param('experiment_params.total_epochs')
+    @param('experiment_params.epochs_per_level')
     @param('optimizer.warmup_epochs')
     @param('optimizer.lr')
     @param('optimizer.lr_min')
-    def __init__(self, total_epochs, warmup_epochs, lr, lr_min, optimizer, last_epoch=-1):
+    def __init__(self, epochs_per_level, warmup_epochs, lr, lr_min, optimizer, last_epoch=-1):
         super().__init__(optimizer, last_epoch)
-        self.total_epochs = total_epochs
+        self.epochs_per_level = epochs_per_level
         self.warmup_epochs = warmup_epochs
         self.lr = lr
         self.lr_min = lr_min
@@ -42,7 +42,7 @@ class CosineLRWarmup(LRScheduler):
         else:
             # Adjust the epoch count so that the cosine annealing phase starts right after the warmup
             adjusted_epoch = self.last_epoch - self.warmup_epochs
-            total_adjusted_epochs = self.total_epochs - self.warmup_epochs
+            total_adjusted_epochs = self.epochs_per_level - self.warmup_epochs
             return self.lr_min + 0.5 * (1 + np.cos(np.pi * adjusted_epoch / total_adjusted_epochs)) * (self.lr - self.lr_min)
 
 # MultiStep LR with Warmup Scheduler
@@ -68,7 +68,7 @@ class ImageNetLRDropsWarmup(LRScheduler):
 
     def get_lr(self):
         if self.last_epoch < 10:
-            return self.lr
+            return self.lr * 0.1
         elif 10 <= self.last_epoch < 40:
             return self.lr
         elif 40 <= self.last_epoch < 70:

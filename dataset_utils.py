@@ -15,7 +15,7 @@ from ffcv.fields.basics import IntDecoder
 class FFCVImageNet:
     @param('dataset.batch_size')
     @param('dataset.num_workers')
-    def __init__(self, batch_size, num_workers, distributed=True):
+    def __init__(self, batch_size, num_workers, this_device, distributed=True):
         super(FFCVImageNet, self).__init__()
         data_root = '/home/harsha/v0.1/'
 
@@ -25,20 +25,20 @@ class FFCVImageNet:
         train_image_pipeline = [RandomResizedCropRGBImageDecoder((224, 224)),
                             RandomHorizontalFlip(),
                             ToTensor(),
-                            ToDevice(torch.device('cuda'), non_blocking=True),
+                            ToDevice(torch.device(this_device), non_blocking=True),
                             ToTorchImage(),
                             NormalizeImage(IMAGENET_MEAN, IMAGENET_STD, np.float16)]
 
         val_image_pipeline = [CenterCropRGBImageDecoder((256, 256), ratio=DEFAULT_CROP_RATIO),
                               ToTensor(),
-                              ToDevice(torch.device('cuda'), non_blocking=True),
+                              ToDevice(torch.device(this_device), non_blocking=True),
                               ToTorchImage(),
                               NormalizeImage(IMAGENET_MEAN, IMAGENET_STD, np.float16)]
 
         label_pipeline = [IntDecoder(),
                             ToTensor(),
                             Squeeze(),
-                            ToDevice(torch.device('cuda'), non_blocking=True)]
+                            ToDevice(torch.device(this_device), non_blocking=True)]
 
 
 
@@ -51,7 +51,7 @@ class FFCVImageNet:
                               pipelines   = { 'image' : train_image_pipeline,
                                               'label' : label_pipeline},
                               distributed = distributed,
-                              seed = 1
+                              seed = 0
                               )
 
         self.val_loader = Loader(data_root + 'val_500_0.50_90.ffcv',
@@ -62,5 +62,5 @@ class FFCVImageNet:
                             pipelines   = { 'image' : val_image_pipeline,
                                             'label' : label_pipeline},
                             distributed = distributed,
-                            seed = 1
+                            seed = 0
                             )

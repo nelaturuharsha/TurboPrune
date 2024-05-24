@@ -49,9 +49,10 @@ def get_sparsity(model):
 class PruningStuff:
     def __init__(self, model=None):
         self.device = torch.device('cuda')
+        this_device = 'cuda:0'
         self.config = get_current_config()
 
-        dls = FFCVImageNet(distributed=False)
+        dls = FFCVImageNet(distributed=False, this_device=this_device)
         self.train_loader, self.test_loader = dls.train_loader, dls.val_loader
 
         if model is None:
