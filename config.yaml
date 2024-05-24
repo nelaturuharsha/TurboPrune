@@ -15,10 +15,10 @@ dataset:
 prune_params:
   prune_rate: 0.2
   er_init: 0.105
-  er_method: er_erk 
+  er_method: just dont 
   prune_method: synflow
 experiment_params:
-  total_epochs: 100
+  epochs_per_level: 90 
   num_levels: 30
   training_type: wr
 optimizer:
