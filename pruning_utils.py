@@ -20,7 +20,6 @@ import torch.multiprocessing as mp
 
 ## file-based imports
 import models
-from dataset_utils import FFCVImageNet
 import schedulers
 from utils.conv_type import ConvMask
 from harness_params import *
@@ -33,7 +32,19 @@ from fastargs.decorators import param
 from fastargs import Param, Section
 from fastargs.validation import And, OneOf
 
+## ffcv
+from ffcv.pipeline.operation import Operation
+from ffcv.loader import Loader, OrderOption
+from ffcv.transforms import ToTensor, ToDevice, Squeeze, NormalizeImage, \
+    RandomHorizontalFlip, ToTorchImage, Convert
+from ffcv.fields.decoders import RandomResizedCropRGBImageDecoder, CenterCropRGBImageDecoder
+from ffcv.fields.basics import IntDecoder
+
 get_current_params()
+
+IMAGENET_MEAN = np.array([0.485, 0.456, 0.406]) * 255
+IMAGENET_STD = np.array([0.229, 0.224, 0.225]) * 255
+
 
 def get_sparsity(model):
         # finds the current density of the model and returns the density scalar value
@@ -48,25 +59,81 @@ def get_sparsity(model):
  
 class PruningStuff:
     def __init__(self, model=None):
-        self.device = torch.device('cuda')
-        this_device = 'cuda:0'
+        self.this_device = 'cuda:0'
         self.config = get_current_config()
 
-        dls = FFCVImageNet(distributed=False, this_device=this_device)
-        self.train_loader, self.test_loader = dls.train_loader, dls.val_loader
-
+        self.train_loader = self.create_train_loader(this_device=self.this_device, distributed=False)
         if model is None:
             self.model = self.acquire_model()
         else:
             self.model = model
         self.criterion = nn.CrossEntropyLoss()
 
+    @param('dataset.batch_size')
+    @param('dataset.num_workers')
+    def create_train_loader(self, batch_size, num_workers, this_device, distributed=True):
+        data_root = '/home/harsha/v0.1/'
+        train_image_pipeline = [RandomResizedCropRGBImageDecoder((224, 224)),
+                            RandomHorizontalFlip(),
+                            ToTensor(),
+                            ToDevice(torch.device(this_device), non_blocking=True),
+                            ToTorchImage(),
+                            NormalizeImage(IMAGENET_MEAN, IMAGENET_STD, np.float16)]
+
+        label_pipeline = [IntDecoder(),
+                            ToTensor(),
+                            Squeeze(),
+                            ToDevice(torch.device(this_device), non_blocking=True)]
+
+
+        train_loader = Loader(data_root + 'train_500_0.50_90.ffcv', 
+                              batch_size  = batch_size,
+                              num_workers = num_workers,
+                              order       = OrderOption.RANDOM,
+                              os_cache    = True,
+                              drop_last   = True,
+                              pipelines   = { 'image' : train_image_pipeline,
+                                              'label' : label_pipeline},
+                              distributed = distributed,
+                              seed = 0
+                              )
+        
+        return train_loader
+
+    @param('dataset.batch_size')
+    @param('dataset.num_workers')
+    def create_test_loader(self, batch_size, num_workers, this_device, distributed=True):
+        data_root = '/home/harsha/v0.1/' 
+        val_image_pipeline = [CenterCropRGBImageDecoder((256, 256), ratio=DEFAULT_CROP_RATIO),
+                              ToTensor(),
+                              ToDevice(torch.device(this_device), non_blocking=True),
+                              ToTorchImage(),
+                              NormalizeImage(IMAGENET_MEAN, IMAGENET_STD, np.float16)]
+
+        label_pipeline = [IntDecoder(),
+                            ToTensor(),
+                            Squeeze(),
+                            ToDevice(torch.device(this_device), non_blocking=True)]
+
+        val_loader = Loader(data_root + 'val_500_0.50_90.ffcv',
+                            batch_size  = batch_size,
+                            num_workers = num_workers,
+                            order       = OrderOption.SEQUENTIAL,
+                            drop_last   = True,
+                            pipelines   = { 'image' : val_image_pipeline,
+                                            'label' : label_pipeline},
+                            distributed = distributed,
+                            seed = 0
+                            )
+        return val_loader
+
+
     @param("model_params.model_name")
     @param("dataset.num_classes")
     def acquire_model(self, model_name, num_classes):
         model_cls = getattr(models, model_name)
         model = model_cls(num_classes=num_classes)
-        model.to(self.device)
+        model.to(self.this_device)
         if self.config['prune_params.er_method'] != 'just dont':
             model = self.prune_at_initialization(model=model)
         return model

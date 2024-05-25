@@ -22,10 +22,9 @@ import torchvision
 
 ## file-based imports
 import models
-import pruning_utils
-from dataset_utils import FFCVImageNet
+from utils.dataset_utils import FFCVImageNet
 import schedulers
-from pruning_utils import *
+import pruning_utils
 
 ## fastargs
 import fastargs
@@ -35,6 +34,21 @@ from fastargs import Param, Section
 from fastargs.validation import And, OneOf
 from torch.cuda.amp import GradScaler, autocast
 
+##ffcv
+from ffcv.pipeline.operation import Operation
+from ffcv.loader import Loader, OrderOption
+from ffcv.transforms import ToTensor, ToDevice, Squeeze, NormalizeImage, \
+    RandomHorizontalFlip, ToTorchImage, Convert
+from ffcv.fields.decoders import RandomResizedCropRGBImageDecoder, CenterCropRGBImageDecoder
+from ffcv.fields.basics import IntDecoder
+
+#os.environ['TORCH_COMPILE_DEBUG'] = '1'
+
+DEFAULT_CROP_RATIO = 224/256
+IMAGENET_MEAN = np.array([0.485, 0.456, 0.406]) * 255
+IMAGENET_STD = np.array([0.229, 0.224, 0.225]) * 255
+
+torch.set_num_threads(1)
 
 def ddp_setup(rank, world_size):
     os.environ['MASTER_ADDR'] = 'localhost'
@@ -50,10 +64,10 @@ class Harness:
         self.device = torch.device(this_device)
         self.world_size = dist.get_world_size()
 
-        dls = FFCVImageNet(distributed=True, this_device=this_device)
-        self.train_loader, self.test_loader = dls.train_loader, dls.val_loader
-        self.model = model
-        self.model = self.model.to(self.device)
+        self.train_loader, self.test_loader = self.create_train_loader(this_device=this_device), self.create_test_loader(this_device=this_device)
+
+        self.model = model.to(self.device)
+        self.model = torch.compile(self.model, mode='reduce-overhead')
 
         self.model = DDP(self.model, device_ids=[self.gpu_id])
 
@@ -64,7 +78,64 @@ class Harness:
         self.data_df['test_acc'] = []
         self.data_df['max_test_acc'] = []
         self.expt_dir = expt_dir 
-        self.scaler = GradScaler()
+
+    @param('dataset.batch_size')
+    @param('dataset.num_workers')
+    def create_train_loader(self, batch_size, num_workers, this_device, distributed=True):
+        data_root = '/home/harsha/v0.1/'
+        train_image_pipeline = [RandomResizedCropRGBImageDecoder((224, 224)),
+                            RandomHorizontalFlip(),
+                            ToTensor(),
+                            ToDevice(torch.device(this_device), non_blocking=True),
+                            ToTorchImage(),
+                            NormalizeImage(IMAGENET_MEAN, IMAGENET_STD, np.float16)]
+
+        label_pipeline = [IntDecoder(),
+                            ToTensor(),
+                            Squeeze(),
+                            ToDevice(torch.device(this_device), non_blocking=True)]
+
+
+        train_loader = Loader(data_root + 'train_500_0.50_90.ffcv', 
+                              batch_size  = batch_size,
+                              num_workers = num_workers,
+                              order       = OrderOption.RANDOM,
+                              os_cache    = True,
+                              drop_last   = True,
+                              pipelines   = { 'image' : train_image_pipeline,
+                                              'label' : label_pipeline},
+                              distributed = distributed,
+                              seed = 0
+                              )
+        
+        return train_loader
+
+    @param('dataset.batch_size')
+    @param('dataset.num_workers')
+    def create_test_loader(self, batch_size, num_workers, this_device, distributed=True):
+        data_root = '/home/harsha/v0.1/' 
+        val_image_pipeline = [CenterCropRGBImageDecoder((256, 256), ratio=DEFAULT_CROP_RATIO),
+                              ToTensor(),
+                              ToDevice(torch.device(this_device), non_blocking=True),
+                              ToTorchImage(),
+                              NormalizeImage(IMAGENET_MEAN, IMAGENET_STD, np.float16)]
+
+        label_pipeline = [IntDecoder(),
+                            ToTensor(),
+                            Squeeze(),
+                            ToDevice(torch.device(this_device), non_blocking=True)]
+
+        val_loader = Loader(data_root + 'val_500_0.50_90.ffcv',
+                            batch_size  = batch_size,
+                            num_workers = num_workers,
+                            order       = OrderOption.SEQUENTIAL,
+                            drop_last   = True,
+                            pipelines   = { 'image' : val_image_pipeline,
+                                            'label' : label_pipeline},
+                            distributed = distributed,
+                            seed = 0
+                            )
+        return val_loader
 
 
     @param('optimizer.lr')
@@ -89,17 +160,17 @@ class Harness:
         tepoch = tqdm.tqdm(self.train_loader, unit='batch', desc=f'Epoch {epoch}')
         for inputs, targets in tepoch:
             self.optimizer.zero_grad()
-            with autocast(dtype=torch.float16):
+            with autocast(dtype=torch.bfloat16):
                 outputs = self.model(inputs)
                 loss = self.criterion(outputs, targets)
-            self.scaler.scale(loss).backward()
-            self.scaler.step(self.optimizer)
-            self.scaler.update()
+            loss.backward()
+            self.optimizer.step()
             self.scheduler.step()
             train_loss += loss.item()
             _, predicted = outputs.max(1)
             total += targets.size(0)
             correct += predicted.eq(targets).sum().item()
+        
         train_loss /= (len(self.train_loader))
         accuracy = 100. * (correct / total)
         
@@ -111,11 +182,10 @@ class Harness:
         correct = 0
         total = 0
 
-        # Initialize tqdm only on rank 0
-        tloader = tqdm.tqdm(self.test_loader, leave=False, desc='Testing')
+        tloader = tqdm.tqdm(self.test_loader, desc='Testing')
         with torch.no_grad():
             for inputs, targets in tloader:
-                with autocast(dtype=torch.float16):
+                with autocast(dtype=torch.bfloat16):
                     outputs = self.model(inputs)
                     loss = self.criterion(outputs, targets)
                 
@@ -164,13 +234,14 @@ class Harness:
             test_acc_tensor /= self.world_size
 
             if self.gpu_id == 0:
-                new_table.add_row([epoch, train_loss_tensor.item(), test_loss_tensor.item(), train_acc_tensor.item(), test_acc_tensor.item()])
+                tr_l, te_l, tr_a, te_a = train_loss_tensor.item(), test_loss_tensor.item(), train_acc_tensor.item(), test_acc_tensor.item()
+                new_table.add_row([epoch, tr_l, te_l, tr_a, te_a])
                 print(new_table)
 
-                sparsity_level_df['train_acc'].append(train_acc_tensor.item())
-                sparsity_level_df['test_acc'].append(test_acc)
-                sparsity_level_df['train_loss'].append(train_loss_tensor.item())
-                sparsity_level_df['test_loss'].append(test_loss)
+                sparsity_level_df['train_loss'].append(tr_l)
+                sparsity_level_df['test_loss'].append(te_l)
+                sparsity_level_df['train_acc'].append(tr_a)
+                sparsity_level_df['test_acc'].append(te_a)
 
                 save_matching = (threshold == 1.0) and (training_type == 'wr') and (epoch == 9)
                 if save_matching and self.gpu_id == 0:
@@ -181,10 +252,10 @@ class Harness:
             pd.DataFrame(sparsity_level_df).to_csv(f'{self.expt_dir}/metrics/epochwise_metrics/level_{threshold}_metrics.csv')
             sparsity = self.compute_sparsity(self.model)
             self.data_df['sparsity'].append(sparsity)
-            self.data_df['text_acc'].append(test_acc_tensor.item())
+            self.data_df['text_acc'].append(te_a)
             self.data_df['max_test_acc'].append(max(sparsity_level_df['test_acc']))
 
-            #torch.save(self.model.module.state_dict(), f'{self.expt_dir}/checkpoints/model_{threshold}_epoch_final.pt')
+            torch.save(self.model.module.state_dict(), f'{self.expt_dir}/checkpoints/model_{threshold}_epoch_final.pt')
 
         dist.barrier()
 
@@ -221,17 +292,15 @@ class Harness:
 def main(rank, model, world_size, threshold, level):
     expt_dir = './experiments/'
     ddp_setup(rank, world_size)
+    print()
     config = get_current_config()
     parser = ArgumentParser()
     config.augment_argparse(parser)
     config.collect_argparse_args(parser)
-
     config.validate(mode='stderr')
-
     harness = Harness(gpu_id=rank, model=model, expt_dir=expt_dir)
     if rank == 0:
         torch.save(harness.optimizer.state_dict(), f'{expt_dir}/artifacts/optimizer.pt')
-
     harness.train_one_level(threshold=threshold)
 
     if rank == 0:
@@ -257,32 +326,28 @@ if __name__ == '__main__':
     config.validate(mode='stderr')
     config.summary()
 
-    #garbage_harness = pruning_utils.PruningStuff(model=torchvision.models.resnet18())
-    #init_model = garbage_harness.model.cpu()
-    init_model = torchvision.models.resnet50().to(memory_format=torch.channels_last)
-    
+    garbage_harness = pruning_utils.PruningStuff()
+    init_model = garbage_harness.model
     prune_rate = 0.2
     num_levels = 30
     thresholds = [(1 - prune_rate) ** level for level in range(num_levels)]
     expt_dir = './experiments/'
-
     if not os.path.exists(expt_dir):
         os.makedirs(expt_dir)
         os.makedirs(f'{expt_dir}/checkpoints')
         os.makedirs(f'{expt_dir}/metrics')
         os.makedirs(f'{expt_dir}/metrics/epochwise_metrics')
         os.makedirs(f'{expt_dir}/artifacts/')
-
+    
     torch.save(init_model.state_dict(), f'{expt_dir}/checkpoints/random_init_start.pt')
     
     world_size = torch.cuda.device_count()
     for i, threshold in enumerate(thresholds):
         mp.spawn(main, args=(init_model, world_size, threshold, i), nprocs=world_size, join=True)
-        
         if threshold != 1.0:
             prune_harness = PrunerStuff().load_from_ckpt(f'{expt_dir}/checkpoints/model_level_{i-1}.pt')
             prune_harnes.level_pruner(density=threshold)
-        
+    
 
 
 

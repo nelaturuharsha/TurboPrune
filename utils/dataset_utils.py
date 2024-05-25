@@ -19,8 +19,9 @@ class FFCVImageNet:
         super(FFCVImageNet, self).__init__()
         data_root = '/home/harsha/v0.1/'
 
-        IMAGENET_MEAN = np.array([0.485, 0.456, 0.406]) * 255
-        IMAGENET_STD = np.array([0.229, 0.224, 0.225]) * 255
+        self.IMAGENET_MEAN = np.array([0.485, 0.456, 0.406]) * 255
+        self.IMAGENET_STD = np.array([0.229, 0.224, 0.225]) * 255
+
         DEFAULT_CROP_RATIO = 224/256
         train_image_pipeline = [RandomResizedCropRGBImageDecoder((224, 224)),
                             RandomHorizontalFlip(),
@@ -58,7 +59,7 @@ class FFCVImageNet:
                             batch_size  = batch_size,
                             num_workers = num_workers,
                             order       = OrderOption.SEQUENTIAL,
-                            drop_last   = False,
+                            drop_last   = True,
                             pipelines   = { 'image' : val_image_pipeline,
                                             'label' : label_pipeline},
                             distributed = distributed,

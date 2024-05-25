@@ -17,14 +17,15 @@ import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch import optim
 import torch.multiprocessing as mp
+
 ## torchvision
+import torchvision
 
 ## file-based imports
 import models
 import pruning_utils
-from dataset_utils import FFCVImageNet
+from utils.dataset_utils import FFCVImageNet
 import schedulers
-from pruning_utils import *
 
 ## fastargs
 import fastargs
@@ -34,12 +35,14 @@ from fastargs import Param, Section
 from fastargs.validation import And, OneOf
 from torch.cuda.amp import GradScaler, autocast
 
+os.environ['TORCH_COMPILE_DEBUG'] = '1'
+
 
 class Harness:
     def __init__(self, gpu_id, expt_dir, model=None):
         self.gpu_id = gpu_id
         self.device = torch.device(f'cuda:{self.gpu_id}')
-        dls = FFCVImageNet(distributed=False)
+        dls = FFCVImageNet(distributed=False, this_device=f'cuda:{self.gpu_id}')
         self.train_loader, self.test_loader = dls.train_loader, dls.val_loader
 
         self.config = get_current_config()
@@ -53,8 +56,6 @@ class Harness:
         self.data_df['test_acc'] = []
         self.data_df['max_test_acc'] = []
         self.expt_dir = expt_dir 
-        self.scaler = GradScaler()
-
 
     @param('optimizer.lr')
     @param('optimizer.momentum')
@@ -79,12 +80,11 @@ class Harness:
         for inputs, targets in tepoch:            
             inputs, targets = inputs.to(self.device), targets.to(self.device)
             self.optimizer.zero_grad()
-            with autocast(dtype=torch.float16):
+            with autocast(dtype=torch.bfloat16):
                 outputs = self.model(inputs)
                 loss = self.criterion(outputs, targets)
-            self.scaler.scale(loss).backward()
-            self.scaler.step(self.optimizer)
-            self.scaler.update()
+            loss.backward()
+            self.optimizer.step()
             self.scheduler.step()
             train_loss += loss.item()
             _, predicted = outputs.max(1)
@@ -106,7 +106,7 @@ class Harness:
         with torch.no_grad():
             for inputs, targets in tloader:
                 inputs, targets = inputs.to(self.device), targets.to(self.device)
-                with autocast(dtype=torch.float16):
+                with autocast(dtype=torch.bfloat16):
                     outputs = self.model(inputs)
                     loss = self.criterion(outputs, targets)
                 
@@ -225,9 +225,10 @@ if __name__ == '__main__':
     config.validate(mode='stderr')
     config.summary()
 
-    garbage_harness = pruning_utils.PruningStuff()
-    init_model = garbage_harness.model
-    
+    #garbage_harness = pruning_utils.PruningStuff()
+    #init_model = torch.compile(garbage_harness.model)
+    init_model = torch.compile(models.ResNet50(), mode='reduce-overhead')
+    #init_model = models.ResNet50()
     prune_rate = 0.2
     num_levels = 30
     thresholds = [(1 - prune_rate) ** level for level in range(num_levels)]
@@ -242,14 +243,12 @@ if __name__ == '__main__':
 
     torch.save(init_model.state_dict(), f'{expt_dir}/checkpoints/random_init_start.pt')
     
-    #world_size = torch.cuda.device_count()
     for i, threshold in enumerate(thresholds):
         main(init_model, threshold, i)
-        #mp.spawn(main, args=(init_model, world_size, threshold, i), nprocs=world_size)
         
-        if threshold != 1.0:
-            prune_harness = PrunerStuff().load_from_ckpt(f'{expt_dir}/checkpoints/model_level_{i-1}.pt')
-            prune_harnes.level_pruner(density=threshold)
+        #if threshold != 1.0:
+            #prune_harness = PrunerStuff().load_from_ckpt(f'{expt_dir}/checkpoints/model_level_{i-1}.pt')
+            #prune_harnes.level_pruner(density=threshold)
         
 
 
