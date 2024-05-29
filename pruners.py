@@ -1,124 +1,6 @@
-## pythonic imports
-import numpy as np
-
-## torch
 import torch
 import torch.nn as nn
-## torchvision
-
-## file-based imports
-import models
 from utils.conv_type import ConvMask, LinearMask
-from harness_params import *
-import pruners
-
-## fastargs
-from fastargs import get_current_config
-from fastargs.decorators import param
-
-## ffcv
-from ffcv.loader import Loader, OrderOption
-from ffcv.transforms import ToTensor, ToDevice, Squeeze, NormalizeImage, \
-    RandomHorizontalFlip, ToTorchImage
-from ffcv.fields.decoders import RandomResizedCropRGBImageDecoder
-from ffcv.fields.basics import IntDecoder
-
-get_current_params()
-
-IMAGENET_MEAN = np.array([0.485, 0.456, 0.406]) * 255
-IMAGENET_STD = np.array([0.229, 0.224, 0.225]) * 255
-DEFAULT_CROP_RATIO = 224/256
-
-def get_sparsity(model):
-        # finds the current density of the model and returns the density scalar value
-        nz = 0
-        total = 0
-        for n, m in model.named_modules():
-            if isinstance(m, (ConvMask)):
-                nz += m.mask.sum()
-                total += m.mask.numel()
-        
-        return nz / total
- 
-class PruningStuff:
-    def __init__(self, model=None):
-        self.this_device = 'cuda:0'
-        self.config = get_current_config()
-
-        self.train_loader = self.create_train_loader()
-        if model is None:
-            self.model = self.acquire_model()
-        else:
-            self.model = model
-        self.criterion = nn.CrossEntropyLoss()
-
-    @param('dataset.batch_size')
-    @param('dataset.num_workers')
-    def create_train_loader(self, batch_size, num_workers):
-        data_root = '/home/c02hane/CISPA-projects/ffcv_imagenet-2023/'
-        train_image_pipeline = [RandomResizedCropRGBImageDecoder((224, 224)),
-                            RandomHorizontalFlip(),
-                            ToTensor(),
-                            ToDevice(torch.device('cuda:0'), non_blocking=True),
-                            ToTorchImage(),
-                            NormalizeImage(IMAGENET_MEAN, IMAGENET_STD, np.float32)]
-
-        label_pipeline = [IntDecoder(),
-                            ToTensor(),
-                            Squeeze(),
-                            ToDevice(torch.device('cuda:0'), non_blocking=True)]
-
-
-        train_loader = Loader(data_root + 'train_500_0.50_90.beton', 
-                              batch_size  = batch_size,
-                              num_workers = num_workers,
-                              order       = OrderOption.RANDOM,
-                              os_cache    = True,
-                              drop_last   = True,
-                              pipelines   = { 'image' : train_image_pipeline,
-                                              'label' : label_pipeline},
-                              )
-        
-        return train_loader
-
-    @param("model_params.model_name")
-    @param("dataset.num_classes")
-    def acquire_model(self, model_name, num_classes):
-        model_cls = getattr(models, model_name)
-        model = model_cls(num_classes=num_classes)
-        model.to(self.this_device)
-        if self.config['prune_params.er_method'] != 'just dont':
-            model = self.prune_at_initialization(model=model)
-        return model
-
-    @param('prune_params.er_method')
-    @param('prune_params.er_init')
-    def prune_at_initialization(self, er_method, er_init):
-        er_method_name = f'prune_{er_method}'
-        pruner_method = getattr(pruners, er_method_name)
-
-        if er_method in {'synflow', 'snip'}:
-            model = pruner_method(self.model, self.train_loader, er_init)
-        else:
-            pruner_method(self.model, er_init)
-        
-        return model
-
-    @param('prune_params.prune_method')
-    def level_pruner(self, prune_method, density):
-        print(f'Sparsity before pruning: {get_sparsity(self.model)}')
-        prune_method_name = f'prune_{prune_method}'
-        pruner_method = getattr(pruners, prune_method_name)
-        if prune_method in {'synflow', 'snip'}:
-            self.model = pruner_method(self.model, self.train_loader, density)
-        else:
-            print('GOING ONCE, GOING TWICE SOLD')
-            pruner_method(self.model, density)
-        print(f'Sparsity after pruning: {get_sparsity(self.model)}')
-
-    def load_from_ckpt(self, path):
-        self.model.load_state_dict(torch.load(path))
-
 
 def prune_mag(model, density):
     score_list = {}
@@ -147,6 +29,7 @@ def prune_mag(model, density):
     return model
 
 def prune_random_erk(model, density):
+
     sparsity_list = []
     num_params_list = []
     total_params = 0
@@ -159,7 +42,7 @@ def prune_random_erk(model, density):
             sparsity_list.append(torch.tensor(m.weight.shape).sum() / m.weight.numel())
             num_params_list.append(m.weight.numel())
             total_params += m.weight.numel()
-    
+
     num_params_kept = (torch.tensor(sparsity_list) * torch.tensor(num_params_list)).sum()
     num_params_to_keep = total_params * density
     C = num_params_to_keep / num_params_kept
@@ -199,12 +82,12 @@ def prune_snip(model, trainloader, density):
         output = model(images)
         criterion(output, target).backward()
         break
-    
+
     score_list = {}
     for n, m in model.named_modules():
         if isinstance(m, (ConvMask)):
             score_list[n] = (m.weight.grad * m.weight * m.mask.to(m.weight.device)).detach().abs_()
-    
+
     global_scores = torch.cat([torch.flatten(v) for v in score_list.values()])
     k = int((1 - density) * global_scores.numel())
     threshold, _ = torch.kthvalue(global_scores, k)
@@ -226,6 +109,7 @@ def prune_snip(model, trainloader, density):
 
 
 def prune_synflow(model, trainloader, density):
+
     @torch.no_grad()
     def linearize(model):
         # model.double()
@@ -240,7 +124,7 @@ def prune_synflow(model, trainloader, density):
         # model.float()
         for n, param in model.state_dict().items():
             param.mul_(signs[n])
-    
+
     signs = linearize(model)
 
     # (data, _) = next(iter(trainloader))
@@ -252,12 +136,12 @@ def prune_synflow(model, trainloader, density):
         output = model(input)
         torch.sum(output).backward()
         break
-    
+
     score_list = {}
     for n, m in model.named_modules():
         if isinstance(m, (ConvMask)):
             score_list[n] = (m.mask.to(m.weight.device) * m.weight.grad * m.weight).detach().abs_()
-    
+
     model.zero_grad()
 
     nonlinearize(model, signs)
@@ -340,7 +224,7 @@ def prune_er_erk(model, er_sparse_init):
             sparsity_list.append(torch.tensor(m.weight.shape).sum() / m.weight.numel())
             num_params_list.append(m.weight.numel())
             total_params += m.weight.numel()
-    
+
     num_params_kept = (torch.tensor(sparsity_list) * torch.tensor(num_params_list)).sum()
     num_params_to_keep = total_params * er_sparse_init
     C = num_params_to_keep / num_params_kept
@@ -380,4 +264,3 @@ def prune_er_balanced(model, er_sparse_init):
             m.set_er_mask(sparsity_list[l])
             l += 1
     print(sparsity_list)
-

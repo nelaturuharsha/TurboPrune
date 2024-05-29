@@ -16,13 +16,15 @@ prune_params:
   prune_rate: 0.2
   er_init: 0.105
   er_method: just dont 
-  prune_method: mag 
+  prune_method: synflow
 experiment_params:
-  epochs_per_level: 90
-  num_levels: 30
-  training_type: imp
+  epochs_per_level: 90 
+  num_levels: 1
+  training_type: wr
 optimizer:
   lr: 0.1
   scheduler_type: ImageNetLRDropsWarmup
   warmup_epochs: 10
   lr_min: 0.01
+dist:
+  world_size: 8

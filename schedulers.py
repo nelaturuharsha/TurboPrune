@@ -2,6 +2,7 @@ import numpy as np
 import fastargs
 from fastargs import get_current_config
 from fastargs.decorators import param
+import math
 
 get_current_config()
 
@@ -52,12 +53,13 @@ class MultiStepLRWarmup(LRScheduler):
     def __init__(self, lr, warmup_epochs, optimizer, last_epoch=-1):
         super().__init__(optimizer, last_epoch)
         self.lr = lr
+        self.warmup_epochs = warmup_epochs
 
     def get_lr(self):
         if self.last_epoch < self.warmup_epochs:
-            return _warmup_lr(lr, self.warmup_epochs, self.last_epoch)
+            return _warmup_lr(self.lr, self.warmup_epochs, self.last_epoch)
         else:
-            return lr * (0.1 ** ((self.last_epoch - self.warmup_epochs) // 60))
+            return self.lr * (0.1 ** ((self.last_epoch - self.warmup_epochs) // 60))
 
 # ImageNet LR Drops with Warmup Scheduler
 class ImageNetLRDropsWarmup(LRScheduler):

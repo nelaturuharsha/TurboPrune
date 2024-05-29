@@ -41,3 +41,8 @@ Section('optimizer', 'data related stuff').params(
     scheduler_type=Param(And(str, OneOf(['MultiStepLRWarmup', 'ImageNetLRDropsWarmup', 'CosineLRWarmup'])), required=True),
     lr_min=Param(float, 'minimum learning rate for cosine', default=0.01))
 
+Section('dist', 'distributed parameters').params(
+    distributed=Param(bool, 'use distributed training', default=True),
+    address=Param(str, 'default address', default='localhost'),
+    port=Param(str, 'default port', default='12345'),
+)
