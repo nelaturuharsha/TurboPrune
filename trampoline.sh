@@ -7,4 +7,4 @@ pip install pandas
 pip install pyyaml
 pip install tqdm
 
-python /home/c02hane/CISPA-projects/neuron_pruning-2024/lottery-ticket-harness/harness.py --config /home/c02hane/CISPA-projects/neuron_pruning-2024/lottery-ticket-harness/config.yaml
+python /home/c02hane/CISPA-projects/neuron_pruning-2024/lottery-ticket-harness/harness.py --config /home/c02hane/CISPA-projects/neuron_pruning-2024/lottery-ticket-harness/"$1"

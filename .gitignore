@@ -167,4 +167,4 @@ checkpoints/
 .DS_Store
 experiment_*
 *.yaml
-spacecraft.sh
+*.sh
