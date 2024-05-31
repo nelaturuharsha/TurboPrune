@@ -58,7 +58,7 @@ class Bottleneck(nn.Module):
         self.stride = stride
 
     def forward(self, x):
-        residual = x
+        residual = x.clone()
 
         out = self.conv1(x)
         out = self.bn1(out)
@@ -72,9 +72,8 @@ class Bottleneck(nn.Module):
         out = self.bn3(out)
 
         if self.downsample is not None:
-            residual = self.downsample(x)
-
-        out += residual
+            residual = self.downsample(residual)
+        out = out + residual
 
         out = self.relu(out)
 

@@ -114,7 +114,7 @@ class Builder(object):
     @param('model_params.nonlinearity')
     def activation(self, nonlinearity):
         if nonlinearity == "relu":
-            return (lambda: nn.ReLU(inplace=True))()
+            return (lambda: nn.ReLU())()
         elif nonlinearity == "leaky_relu":
             return (lambda: nn.LeakyReLU(negative_slope=0.01, inplace=True))()
         elif nonlinearity == "trackact-relu":

@@ -161,3 +161,10 @@ cython_debug/
 #
 experiments/
 torch_compile_debug
+jobs/
+job-*
+checkpoints/
+.DS_Store
+experiment_*
+*.yaml
+*.sh
