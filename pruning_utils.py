@@ -10,7 +10,6 @@ import torch.nn as nn
 import models
 from utils.conv_type import ConvMask, LinearMask
 from harness_params import *
-import pruners
 
 ## fastargs
 from fastargs import get_current_config
@@ -93,26 +92,24 @@ class PruningStuff:
 
     @param('prune_params.er_method')
     @param('prune_params.er_init')
-    def prune_at_initialization(self, er_method, er_init):
+    def prune_at_initialization(self, er_method, er_init, model):
         er_method_name = f'prune_{er_method}'
-        pruner_method = getattr(pruners, er_method_name)
-
+        pruner_method = globals().get(er_method_name)
         if er_method in {'synflow', 'snip'}:
-            model = pruner_method(self.model, self.train_loader, er_init)
+            model = pruner_method(model, self.train_loader, er_init)
         else:
-            pruner_method(self.model, er_init)
+            pruner_method(model, er_init)
         
         return model
-
+        
     @param('prune_params.prune_method')
     def level_pruner(self, prune_method, density):
         print(f'Sparsity before pruning: {get_sparsity(self.model)}')
         prune_method_name = f'prune_{prune_method}'
-        pruner_method = getattr(pruners, prune_method_name)
+        pruner_method = globals().get(prune_method_name)
         if prune_method in {'synflow', 'snip'}:
             self.model = pruner_method(self.model, self.train_loader, density)
         else:
-            print('GOING ONCE, GOING TWICE SOLD')
             pruner_method(self.model, density)
         print(f'Sparsity after pruning: {get_sparsity(self.model)}')
 

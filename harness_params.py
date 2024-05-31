@@ -19,7 +19,8 @@ Section('dataset', 'dataset configuration').params(
     dataset_name=Param(And(str, OneOf(['CIFAR10', 'CIFAR100', 'ImageNet'])),'Name of dataset', required=True),
     num_classes=Param(And(int, OneOf([10, 100, 1000])), 'number of classes',required=True),
     batch_size=Param(int, 'batch size', default=512),
-    num_workers=Param(int, 'num_workers', default=8),)
+    num_workers=Param(int, 'num_workers', default=8),
+    data_root=Param(str, 'path to betons', required=True))
 
 Section('prune_params', 'pruning configuration').params(
     prune_rate=Param(float, 'percentage of parameters to remove',required=True),
@@ -30,7 +31,8 @@ Section('prune_params', 'pruning configuration').params(
 Section('experiment_params', 'parameters to train model').params(
     epochs_per_level=Param(int, 'number of epochs per level', required=True),
     num_levels=Param(int, 'number of pruning levels', required=True),
-    training_type=Param(And(str, OneOf(['imp', 'wr', 'lrr'])), required=True))
+    training_type=Param(And(str, OneOf(['imp', 'wr', 'lrr'])), required=True),
+    expt_setup=Param(And(str, OneOf(['cispa', 'others'])), required=True))
 
 Section('optimizer', 'data related stuff').params(
     lr=Param(float, 'Name of dataset', required=True),
