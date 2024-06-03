@@ -56,6 +56,12 @@ python harness.py --config resnet18_lrr_imagenet.yaml
 
 and it should start :)
 
+### ImageNet Baselines
+<div style="display: flex; justify-content: center; align-items: center;">
+    <img src="assets/imagenet.png" width="500" height="300" style="margin-right: 10px;">
+    <img src="assets/imagenet2.png" width="500" height="300">
+</div>
+
 
 ----------------
 This code is built using references to the substantial hard work put in by [Advait Gadhikar](https://advaitgadhikar.github.io/). Thank you to [Dr. Rebekka Burkholz](https://cispa.de/de/people/c01rebu) for the opportunity to build this :)
