@@ -8,7 +8,7 @@ In this repository, we implement a training harness which enables finding lotter
 - Support for most (if not all) torchvision models. (Transformers will be added later).
 - Multiple pruning techniques, listed below.
 - Simple harness, with fastargs -- easily extensible.
-- Logging to CSV (nothing fancy, but you can integrate easily).
+- Logging to CSV (nothing fancy, but you can integrate wandb/comet/your own system easily).
 - End to End pipeline easily configurarable using [fastargs](https://github.com/GuillaumeLeclerc/fastargs).
 
 ### Datasets Supported
