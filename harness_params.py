@@ -3,15 +3,9 @@ from fastargs.validation import And, OneOf
 
 def get_current_params():
     Section('model_params', 'model details').params(
-    model_name=Param(str, 'model_choice', default='ResNet50', required=True),
-    first_layer_type=Param(str, 'layer type'),
-    conv_type=Param(And(str, OneOf(['ConvMask'])), required=True),
-    bn_type=Param(And(str, OneOf(['LearnedBatchNorm'])), required=True),
-    init=Param(And(str, OneOf(['kaiming_normal'])), required=True),
-    nonlinearity=Param(And(str, OneOf(['relu', 'leaky_relu'])), required=True),
-    mode=Param(And(str, OneOf(['fan_in'])), required=True),
-    scale_fan=Param(bool, 'use scale fan', required=True))
-
+    model_name=Param(str, 'model_choice', default='resnet18', required=True),
+    conv_type=Param(And(str, OneOf(['ConvMask'])), required=True))
+    
 Section('dataset', 'dataset configuration').params(
     dataset_name=Param(And(str, OneOf(['CIFAR10', 'CIFAR100', 'ImageNet'])),'Name of dataset', required=True),
     num_classes=Param(And(int, OneOf([10, 100, 1000])), 'number of classes',required=True),
@@ -39,11 +33,11 @@ Section('optimizer', 'data related stuff').params(
     momentum=Param(float, 'momentum', default=0.9),
     weight_decay=Param(float, 'weight decay', default=1e-4),
     warmup_epochs=Param(int, 'warmup length', default=10),
-    scheduler_type=Param(And(str, OneOf(['MultiStepLRWarmup', 'ImageNetLRDropsWarmup', 'CosineLRWarmup'])), required=True),
+    scheduler_type=Param(And(str, OneOf(['MultiStepLRWarmup', 'ImageNetLRDropsWarmup', 'CosineLRWarmup', 'CustomLRScheduler'])), required=True),
     lr_min=Param(float, 'minimum learning rate for cosine', default=0.01))
 
-Section('dist', 'distributed parameters').params(
+Section('dist_params', 'distributed parameters').params(
     distributed=Param(bool, 'use distributed training', default=True),
     address=Param(str, 'default address', default='localhost'),
-    port=Param(str, 'default port', default='12345'),)
+    port=Param(int, 'default port', default=12350),)
 

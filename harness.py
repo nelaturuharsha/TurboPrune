@@ -25,6 +25,7 @@ import torchvision
 import schedulers
 import pruning_utils
 from harness_utils import *
+from dataset import CIFARLoader
 
 ## fastargs
 from fastargs import get_current_config
@@ -72,7 +73,11 @@ class Harness:
         self.gpu_id = gpu_id
         self.this_device = f'cuda:{self.gpu_id}'
 
-        self.train_loader, self.test_loader = self.create_train_loader(), self.create_test_loader()
+        if 'CIFAR' not in self.config['dataset.dataset_name']:
+            self.train_loader, self.test_loader = self.create_train_loader(), self.create_test_loader()
+        else:
+            self.loaders = CIFARLoader(distributed=True)
+            self.train_loader, self.test_loader = self.loaders.train_loader, self.loaders.test_loader
 
         model = model.to(self.this_device)
         self.model = DDP(model, device_ids=[self.gpu_id])
@@ -148,13 +153,20 @@ class Harness:
         self.criterion = nn.CrossEntropyLoss()
 
     def train_one_epoch(self, epoch):
+        #if 'CIFAR' in self.config['dataset.dataset_name']:
+        self.loaders.train_sampler.set_epoch(epoch)
         model = self.model
         model.train()
         train_loss = 0
         correct = 0
         total = 0
         tepoch = tqdm.tqdm(self.train_loader, unit='batch', desc=f'Epoch {epoch}')
+            
+
         for inputs, targets in tepoch:
+            if 'CIFAR' in self.config['dataset.dataset_name']:
+                inputs, targets = inputs.to(self.this_device), targets.to(self.this_device)
+
             self.optimizer.zero_grad()
             with autocast(dtype=torch.bfloat16):
                 outputs = model(inputs)
@@ -182,6 +194,8 @@ class Harness:
         tloader = tqdm.tqdm(self.test_loader, desc='Testing')
         with torch.no_grad():
             for inputs, targets in tloader:
+                if 'CIFAR' in self.config['dataset.dataset_name']:
+                    inputs, targets = inputs.to(self.this_device), targets.to(self.this_device)
                 with autocast(dtype=torch.bfloat16):
                     outputs = model(inputs)
                     loss = self.criterion(outputs, targets)
@@ -264,24 +278,23 @@ class Harness:
                 updated_df.to_csv(summary_path, index=False)
 
 
-@param('dist.address')
-@param('dist.port')
+@param('dist_params.address')
+@param('dist_params.port')
 def setup_distributed(address, port, gpu_id):
-
     os.environ['MASTER_ADDR'] = address
-    os.environ['MASTER_PORT'] = port
+    os.environ['MASTER_PORT'] = str(port)
     world_size = torch.cuda.device_count()
     init_process_group('nccl', rank=gpu_id, world_size=world_size)
     torch.cuda.set_device(gpu_id)
 
 def main(rank, model, level, expt_dir):
-    setup_distributed(gpu_id=rank)
     config = get_current_config()
     parser = ArgumentParser()
     config.augment_argparse(parser)
     config.collect_argparse_args(parser)
     config.validate(mode='stderr')
-
+    setup_distributed(gpu_id=rank)
+    
     #num_cycles = config['experiment_params.num_cycles']
 
     harness = Harness(model=model, expt_dir=expt_dir, gpu_id=rank)
@@ -331,7 +344,7 @@ if __name__ == '__main__':
     
     world_size = torch.cuda.device_count()
     print(f'Training on {world_size} GPUs')
-    print_sparsity_info(prune_harness.model)
+    #print_sparsity_info(prune_harness.model)
 
     for level in range(len(thresholds)):
         if level != 0:
