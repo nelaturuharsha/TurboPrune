@@ -58,8 +58,8 @@ and it should start :)
 
 ### ImageNet Baselines
 <div style="display: flex; justify-content: center; align-items: center;">
-    <img src="assets/imagenet.png" width="500" height="300" style="margin-right: 10px;">
-    <img src="assets/imagenet2.png" width="500" height="300">
+    <img src="assets/imagenet.png" width="400" height="300" style="margin-right: 10px;">
+    <img src="assets/imagenet2.png" width="400" height="300">
 </div>
 
 
