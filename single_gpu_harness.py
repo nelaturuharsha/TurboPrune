@@ -7,14 +7,12 @@ from argparse import ArgumentParser
 from prettytable import PrettyTable
 import tqdm
 from copy import deepcopy
-import math
 
 ## torch
 import torch
 import torch.nn as nn
 from torch import optim
 from torch.cuda.amp import autocast
-
 
 ## file-based imports
 import schedulers
@@ -61,29 +59,6 @@ def set_seed(seed: int = 42, is_deterministic=False) -> None:
 
 set_seed(1234)
 
-import models 
-## fastargs
-from fastargs import get_current_config
-from fastargs.decorators import param
-from torch.cuda.amp import autocast
-
-##ffcv
-from ffcv.loader import Loader, OrderOption
-from ffcv.transforms import ToTensor, ToDevice, Squeeze, NormalizeImage, \
-    RandomHorizontalFlip, ToTorchImage
-from ffcv.fields.decoders import RandomResizedCropRGBImageDecoder, CenterCropRGBImageDecoder
-from ffcv.fields.basics import IntDecoder
-
-#os.environ['TORCH_COMPILE_DEBUG'] = '1'
-
-DEFAULT_CROP_RATIO = 224/256
-IMAGENET_MEAN = np.array([0.485, 0.456, 0.406]) * 255
-IMAGENET_STD = np.array([0.229, 0.224, 0.225]) * 255
-
-torch.set_num_threads(1)
-torch.backends.cuda.matmul.allow_tf32 = True
-torch.backends.cudnn.allow_tf32 = True
-
 class Harness:
     def __init__(self, gpu_id, expt_dir, model=None):
         self.config = get_current_config()
@@ -94,6 +69,7 @@ class Harness:
 
         model = model.to(self.this_device)
         self.create_optimizers()
+
         self.expt_dir = expt_dir 
 
     @param('dataset.batch_size')
@@ -112,8 +88,8 @@ class Harness:
                             Squeeze(),
                             ToDevice(torch.device(self.this_device), non_blocking=True)]
 
-        train_loader = Loader(os.path.join(data_root, 'train_500_0.50_90.beton'), 
 
+        train_loader = Loader(os.path.join(data_root, 'train_500_0.50_90.beton'), 
                               batch_size  = batch_size,
                               num_workers = num_workers,
                               order       = OrderOption.RANDOM,
@@ -183,7 +159,6 @@ class Harness:
         self.scheduler.step()
         train_loss /= (len(self.train_loader))
         accuracy = 100. * (correct / total)
-
         return train_loss, accuracy
 
     def test(self):
@@ -199,7 +174,7 @@ class Harness:
                 with autocast(dtype=torch.bfloat16):
                     outputs = model(inputs)
                     loss = self.criterion(outputs, targets)
-                 
+                
                 test_loss += loss.item()
                 _, predicted = outputs.max(1)
                 total += targets.size(0)
@@ -210,7 +185,6 @@ class Harness:
 
         return test_loss, accuracy
 
-  
     @param('experiment_params.epochs_per_level')
     @param('experiment_params.training_type')
     def train_one_level(self, epochs_per_level, training_type, level):
@@ -229,6 +203,7 @@ class Harness:
         for epoch in range(epochs_per_level):
             train_loss, train_acc = self.train_one_epoch(epoch)
             test_loss, test_acc = self.test()
+
             
             tr_l, te_l, tr_a, te_a = train_loss, test_loss, train_acc, test_acc
             new_table.add_row([epoch, tr_l, te_l, tr_a, te_a])
@@ -285,15 +260,7 @@ def main(rank, model, level, expt_dir):
     if rank == 0:
         ckpt = os.path.join(expt_dir, 'checkpoints', f'model_level_{level}.pt')
         torch.save(harness.model.module.state_dict(), ckpt)
-
-def main():
-    expt_dir = '/home/c02hane/CISPA-projects/neuron_pruning-2024/lottery-ticket-harness/experiments'
-    threshold = 0.2
-
-    harness = Harness(gpu_id=0, model=model, expt_dir=expt_dir)
-    torch.save(harness.optimizer.state_dict(), f'{expt_dir}/artifacts/optimizer.pt')
-    harness.train_one_level(threshold=threshold)
-
+    
 
 if __name__ == '__main__':
     config = get_current_config()
@@ -313,8 +280,6 @@ if __name__ == '__main__':
 
     expt_dir = create_experiment_dir_name(config['experiment_params.expt_setup']) 
 
-
-    expt_dir = '/home/c02hane/CISPA-projects/neuron_pruning-2024/lottery-ticket-harness/experiments'
     if not os.path.exists(expt_dir):
         os.makedirs(expt_dir)
         os.makedirs(f'{expt_dir}/checkpoints')
@@ -333,5 +298,4 @@ if __name__ == '__main__':
             print_sparsity_info(prune_harness.model)
         
         print(f'Training level {level} complete, moving on to {level+1}')
-        
-      main()
+    
