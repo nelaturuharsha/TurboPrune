@@ -1,5 +1,6 @@
 ## pythonic imports
 import numpy as np
+import os
 
 ## torch
 import torch
@@ -53,8 +54,8 @@ class PruningStuff:
 
     @param('dataset.batch_size')
     @param('dataset.num_workers')
-    def create_train_loader(self, batch_size, num_workers):
-        data_root = '/home/c02hane/CISPA-projects/ffcv_imagenet-2023/'
+    @param('dataset.data_root')
+    def create_train_loader(self, batch_size, num_workers, data_root):
         train_image_pipeline = [RandomResizedCropRGBImageDecoder((224, 224)),
                             RandomHorizontalFlip(),
                             ToTensor(),
@@ -68,7 +69,7 @@ class PruningStuff:
                             ToDevice(torch.device('cuda:0'), non_blocking=True)]
 
 
-        train_loader = Loader(data_root + 'train_500_0.50_90.beton', 
+        train_loader = Loader(os.path.join(data_root, 'train_500_0.50_90.beton'),
                               batch_size  = batch_size,
                               num_workers = num_workers,
                               order       = OrderOption.RANDOM,
