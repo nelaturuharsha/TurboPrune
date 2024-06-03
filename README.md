@@ -30,14 +30,23 @@ As it stands, ResNets, VGG variants should work out of the box. If you run into 
 8. **Random Pruning** from [The Unreasonable Effectiveness of Random Pruning: Return of the Most Naive Baseline for Sparse Training](https://openreview.net/pdf?id=VBZJ_3tz-t)
 
 ### File structure:
-1. **harness.py** - contains the training harness for actually training the network, has the requisite setup for DDP.
-2. **harness_params.py** - Provides the parameters to be provided via config (fastargs), they are defined here. Please refer to the code, or [documentation]() for usage directions.
-3. **harness_utils.py** - contains methods used for rewinding the weights, optimizer and other nice things we need to make this training work.
-4. **utils/conv_type** - has the layers definitons and the model pre-processing function to insert the mask parameters as a buffer into those layers. This is what you probably want to edit for adding support for > insert custom SOTA architecture here.
-5. **dataset.py** - definiton for CIFAR10/CIFAR100, DDP or otherwise.
-6. **schedulers.py** - learning rate schedulers, for when you need to use them. The default config has what works best.
-7. **pruning_utils.py** - pruning within the harness itself is not very stable and probably not the right way (also the harness is supposed to train the network anyway). So this file contains all the criterion we use for pruning (those in the previous section) and a pruning harness to prune before you train :) -- hopefully this is useful. Pruning harness can be called at the beginning for Pruning at Initialization (PaI), one-shot pruning or in between levels for an iterative method. Where necessary, it will use a GPU/Dataset.
-8. **single_gpu_harness.py** - without all the fancy DDP stuff, straightforward and simple.
+1. **harness.py**: contains the training harness for actually training the network, has the requisite setup for DDP.
+2. **harness_params.py**: Provides the parameters to be provided via config (fastargs), they are defined here. Please refer to the code, or [documentation]() for usage directions.
+3. **harness_utils.py**: contains methods used for rewinding the weights, optimizer and other nice things we need to make this training work.
+4. **utils/conv_type**: has the layers definitons and the model pre-processing function to insert the mask parameters as a buffer into those layers. This is what you probably want to edit for adding support for > insert custom SOTA architecture here.
+5. **utils/dataset.py**: definiton for CIFAR10/CIFAR100, DDP or otherwise.
+6. **utils/schedulers.py**: learning rate schedulers, for when you need to use them. The default config has what works best.
+7. **utils/pruning_utils.py**: Pruning harness.
+ 
+- Pruning within the training harness itself is not very stable w.r.t DDP and probably not the right way (also the harness is supposed to just train the network anyway). 
+- This file contains all the criterion we use for pruning (those in the previous section) and a pruning harness to prune before you train :) -- hopefully this is useful. 
+- Pruning harness can be called at the beginning for 
+    -- Pruning at Initialization (PaI), 
+    -- one-shot pruning or 
+    -- At each level for an iterative method. 
+    -- Where necessary, it will use a GPU/Dataset.
+
+8. **utils/single_gpu_harness.py** - without all the fancy DDP stuff, straightforward and simple.
 
 ### Important Pre-requisites
 - To run ImageNet experiments, you obviously need ImageNet downloaded -- in addition, since we use FFCV, you would need to generate .beton files as per the instructions [here](https://github.com/libffcv/ffcv-imagenet).
