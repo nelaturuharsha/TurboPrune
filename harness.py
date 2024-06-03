@@ -245,6 +245,7 @@ class Harness:
                     torch.save(self.model.module.state_dict(), os.path.join(self.expt_dir, 'checkpoints', 'model_rewind.pt'))
                     torch.save(self.optimizer.state_dict(), os.path.join(self.expt_dir, 'artifacts', 'optimizer_rewind.pt'))
 
+
         if self.gpu_id == 0:
             pd.DataFrame(sparsity_level_df).to_csv(os.path.join(self.expt_dir, 'metrics', 'epochwise_metrics', f'level_{level}_metrics.csv'))
             sparsity = print_sparsity_info(self.model, verbose=False)
@@ -313,9 +314,11 @@ if __name__ == '__main__':
     prune_harness = pruning_utils.PruningStuff()
 
     num_levels = config['experiment_params.num_levels']
+
     resume_level = config['experiment_params.resume_from_level']
     ## if you don't explicitly mention the resume level in the config it will start from level 0 by default
     thresholds = [(1 - config['prune_params.prune_rate']) ** (level) for level in range(resume_level, num_levels)]
+
 
     expt_dir = create_experiment_dir_name(config['experiment_params.expt_setup']) 
 
@@ -336,6 +339,7 @@ if __name__ == '__main__':
             prune_harness.load_from_ckpt(os.path.join(expt_dir, 'checkpoints', f'model_level_{level-1}.pt'))
             prune_harness.level_pruner(density=thresholds[level])
             prune_harness.model = reset_weights(expt_dir=expt_dir, model=prune_harness.model, training_type=config['experiment_params.training_type']) 
+
             print_sparsity_info(prune_harness.model)
         
         mp.spawn(main, args=(prune_harness.model, level, expt_dir), nprocs=world_size, join=True)

@@ -32,6 +32,7 @@ Section('experiment_params', 'parameters to train model').params(
     expt_setup=Param(And(str, OneOf(['cispa', 'others'])), required=True),
     resume_from_level=Param(int, 'level to resume from', default=0)) 
 
+
 Section('optimizer', 'data related stuff').params(
     lr=Param(float, 'Name of dataset', required=True),
     num_workers=Param(int, 'num_workers', default=8),
@@ -45,3 +46,4 @@ Section('dist', 'distributed parameters').params(
     distributed=Param(bool, 'use distributed training', default=True),
     address=Param(str, 'default address', default='localhost'),
     port=Param(str, 'default port', default='12345'),)
+
