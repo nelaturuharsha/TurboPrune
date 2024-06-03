@@ -8,10 +8,10 @@ import torch.nn as nn
 ## torchvision
 
 ## file-based imports
-import models
-from utils.conv_type import ConvMask, LinearMask
+import torchvision.models as models
+from utils.conv_type import * 
 from harness_params import *
-
+from dataset import CIFARLoader
 ## fastargs
 from fastargs import get_current_config
 from fastargs.decorators import param
@@ -55,37 +55,49 @@ class PruningStuff:
     @param('dataset.batch_size')
     @param('dataset.num_workers')
     @param('dataset.data_root')
-    def create_train_loader(self, batch_size, num_workers, data_root):
-        train_image_pipeline = [RandomResizedCropRGBImageDecoder((224, 224)),
-                            RandomHorizontalFlip(),
-                            ToTensor(),
-                            ToDevice(torch.device('cuda:0'), non_blocking=True),
-                            ToTorchImage(),
-                            NormalizeImage(IMAGENET_MEAN, IMAGENET_STD, np.float32)]
+    @param('dataset.dataset_name')
+    def create_train_loader(self, batch_size, num_workers, data_root, dataset_name):
+        if not 'cifar' in dataset_name:
+            train_image_pipeline = [RandomResizedCropRGBImageDecoder((224, 224)),
+                                RandomHorizontalFlip(),
+                                ToTensor(),
+                                ToDevice(torch.device('cuda:0'), non_blocking=True),
+                                ToTorchImage(),
+                                NormalizeImage(IMAGENET_MEAN, IMAGENET_STD, np.float32)]
 
-        label_pipeline = [IntDecoder(),
-                            ToTensor(),
-                            Squeeze(),
-                            ToDevice(torch.device('cuda:0'), non_blocking=True)]
+            label_pipeline = [IntDecoder(),
+                                ToTensor(),
+                                Squeeze(),
+                                ToDevice(torch.device('cuda:0'), non_blocking=True)]
 
 
-        train_loader = Loader(os.path.join(data_root, 'train_500_0.50_90.beton'),
-                              batch_size  = batch_size,
-                              num_workers = num_workers,
-                              order       = OrderOption.RANDOM,
-                              os_cache    = True,
-                              drop_last   = True,
-                              pipelines   = { 'image' : train_image_pipeline,
-                                              'label' : label_pipeline},
-                              )
-        
+            train_loader = Loader(os.path.join(data_root, 'train_500_0.50_90.beton'),
+                                batch_size  = batch_size,
+                                num_workers = num_workers,
+                                order       = OrderOption.RANDOM,
+                                os_cache    = True,
+                                drop_last   = True,
+                                pipelines   = { 'image' : train_image_pipeline,
+                                                'label' : label_pipeline},
+                                )
+        else:
+            loader = CIFARLoader(distributed=False)
+            train_loader = loader.train_loader
+
         return train_loader
 
     @param("model_params.model_name")
     @param("dataset.num_classes")
-    def acquire_model(self, model_name, num_classes):
-        model_cls = getattr(models, model_name)
-        model = model_cls(num_classes=num_classes)
+    @param("dataset.dataset_name")
+    def acquire_model(self, model_name, num_classes, dataset_name):
+        model = getattr(models, model_name)(num_classes=num_classes)
+
+        if 'CIFAR' in dataset_name:
+            model.conv1 = nn.Conv2d(3, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+            model.maxpool = nn.Identity()
+
+        replace_layers(model=model)
+
         model.to(self.this_device)
         if self.config['prune_params.er_method'] != 'just dont':
             model = self.prune_at_initialization(model=model)
@@ -121,7 +133,7 @@ class PruningStuff:
 def prune_mag(model, density):
     score_list = {}
     for n, m in model.named_modules():
-        # torch.cat([torch.flatten(v) for v in self.scores.values()])
+
         if isinstance(m, (ConvMask, LinearMask)):
             score_list[n] = (m.mask.to(m.weight.device) * m.weight).detach().abs_()
 

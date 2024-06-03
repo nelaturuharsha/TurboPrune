@@ -78,4 +78,26 @@ class ImageNetLRDropsWarmup(LRScheduler):
         else:
             return (0.1 ** 2) * self.lr
 
+class CustomLRScheduler:
+    def __init__(self, optimizer, warmup_length):
+        self.optimizer = optimizer
+        self.warmup_length = warmup_length
+        self.epoch = 0
 
+    def get_step_lr(self, epoch, lr):
+        if epoch < self.warmup_length:
+            calc_lr = lr * (epoch + 1) / self.warmup_length
+        elif (epoch >= 10 and epoch < 60):
+            calc_lr = lr
+        elif (epoch >= 60) and (epoch < 120):
+            calc_lr = lr / 10
+        else:
+            calc_lr = lr / 100
+
+        return calc_lr
+
+    def step(self):
+        self.epoch += 1
+        lr = self.get_step_lr(self.epoch, lr=0.1 * math.sqrt(4))
+        for param_group in self.optimizer.param_groups:
+            param_group['lr'] = lr
