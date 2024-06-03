@@ -25,11 +25,11 @@ As it stands, ResNets, VGG variants should work out of the box. If you run into 
 3. **IMP with Weight Rewinding (IMP + WR)** from [Stabilizing the lottery ticket hypothesis](https://arxiv.org/abs/1903.01611)
 4. **IMP with Learning Rate Rewinding (IMP + LRR)** [Comparing Rewinding and Fine-tuning in Neural Network Pruning](https://arxiv.org/abs/2003.02389)
 5. **SNIP:** from [SNIP: Single-shot Network Pruning based on Connection Sensitivity](https://arxiv.org/abs/1810.02340)
-6. **SynFlow:** [https://arxiv.org/abs/2006.05467](https://arxiv.org/abs/2006.05467)
+6. **SynFlow:** [Pruning neural networks without any data by iteratively conserving synaptic flow](https://arxiv.org/abs/2006.05467)
 7. **Random Balanced/ERK Pruning** from [Why Random Pruning Is All We Need to Start Sparse](https://proceedings.mlr.press/v202/gadhikar23a/gadhikar23a.pdf)
 8. **Random Pruning** from [The Unreasonable Effectiveness of Random Pruning: Return of the Most Naive Baseline for Sparse Training](https://openreview.net/pdf?id=VBZJ_3tz-t)
 
-### File structure:
+### Repository structure:
 1. **harness.py**: contains the training harness for actually training the network, has the requisite setup for DDP.
 2. **harness_params.py**: Provides the parameters to be provided via config (fastargs), they are defined here. Please refer to the code, or [documentation]() for usage directions.
 3. **harness_utils.py**: contains methods used for rewinding the weights, optimizer and other nice things we need to make this training work.
