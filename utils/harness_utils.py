@@ -1,9 +1,12 @@
 import torch
 import os
 import prettytable
-from utils.conv_type import ConvMask
+from utils.conv_type import ConvMask, Conv1dMask
 from datetime import datetime
 import uuid
+
+import numpy as np
+import random
 
 def reset_weights(expt_dir, model, training_type):
     if training_type == 'imp':
@@ -59,7 +62,7 @@ def print_sparsity_info(model, verbose=True):
         total_params_kept = 0
 
         for (name, layer) in model.named_modules():
-            if isinstance(layer, ConvMask):
+             if isinstance(layer, (ConvMask, Conv1dMask)):
                 weight_mask = layer.mask
                 sparsity, remaining, total = compute_sparsity(weight_mask)
                 my_table.add_row([name, sparsity.item(), 1-sparsity.item(), f'{remaining}/{total}'])
@@ -88,3 +91,21 @@ def create_experiment_dir_name(expt_type):
         expt_dir = f"./{unique_name}"
 
     return expt_dir
+
+## seed everything
+def set_seed(seed: int = 42, is_deterministic=False) -> None:
+
+    np.random.seed(seed)
+    random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    # When running on the CuDNN backend, two further options must be set
+
+    if is_deterministic:
+        print("This ran")
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+        torch.use_deterministic_algorithms(True)
+    # Set a fixed value for the hash seed
+    os.environ["PYTHONHASHSEED"] = str(seed)
+    print(f"Random seed set as {seed}")

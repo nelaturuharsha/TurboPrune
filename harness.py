@@ -22,10 +22,10 @@ from torch.cuda.amp import autocast
 import torchvision
 
 ## file-based imports
-import schedulers
-import pruning_utils
-from harness_utils import *
-from dataset import CIFARLoader
+import utils.schedulers as schedulers
+import utils.pruning_utils as pruning_utils
+from utils.harness_utils import *
+from utils.dataset import CIFARLoader
 
 ## fastargs
 from fastargs import get_current_config
@@ -47,23 +47,6 @@ torch.set_num_threads(1)
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
 
-## seed everything
-def set_seed(seed: int = 42, is_deterministic=False) -> None:
-
-    np.random.seed(seed)
-    random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
-    # When running on the CuDNN backend, two further options must be set
-
-    if is_deterministic:
-        print("This ran")
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
-        torch.use_deterministic_algorithms(True)
-    # Set a fixed value for the hash seed
-    os.environ["PYTHONHASHSEED"] = str(seed)
-    print(f"Random seed set as {seed}")
 
 set_seed(1234)
 
@@ -153,8 +136,8 @@ class Harness:
         self.criterion = nn.CrossEntropyLoss()
 
     def train_one_epoch(self, epoch):
-        #if 'CIFAR' in self.config['dataset.dataset_name']:
-        self.loaders.train_sampler.set_epoch(epoch)
+        if 'CIFAR' in self.config['dataset.dataset_name']:
+            self.loaders.train_sampler.set_epoch(epoch)
         model = self.model
         model.train()
         train_loss = 0
@@ -344,7 +327,7 @@ if __name__ == '__main__':
     
     world_size = torch.cuda.device_count()
     print(f'Training on {world_size} GPUs')
-    #print_sparsity_info(prune_harness.model)
+    print_sparsity_info(prune_harness.model)
 
     for level in range(len(thresholds)):
         if level != 0:

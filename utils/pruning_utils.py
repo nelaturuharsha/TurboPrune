@@ -10,8 +10,8 @@ import torch.nn as nn
 ## file-based imports
 import torchvision.models as models
 from utils.conv_type import * 
-from harness_params import *
-from dataset import CIFARLoader
+from utils.harness_params import *
+from utils.dataset import CIFARLoader
 ## fastargs
 from fastargs import get_current_config
 from fastargs.decorators import param
@@ -34,7 +34,7 @@ def get_sparsity(model):
         nz = 0
         total = 0
         for n, m in model.named_modules():
-            if isinstance(m, (ConvMask)):
+            if isinstance(m, (ConvMask, Conv1dMask)):
                 nz += m.mask.sum()
                 total += m.mask.numel()
         
@@ -134,7 +134,7 @@ def prune_mag(model, density):
     score_list = {}
     for n, m in model.named_modules():
 
-        if isinstance(m, (ConvMask, LinearMask)):
+        if isinstance(m, (ConvMask, Conv1dMask)):
             score_list[n] = (m.mask.to(m.weight.device) * m.weight).detach().abs_()
 
     global_scores = torch.cat([torch.flatten(v) for v in score_list.values()])
@@ -145,7 +145,7 @@ def prune_mag(model, density):
         total_num = 0
         total_den = 0
         for n, m in model.named_modules():
-            if isinstance(m, (ConvMask, LinearMask)):
+            if isinstance(m, (ConvMask, Conv1dMask)):
                 score = score_list[n].to(m.weight.device)
                 zero = torch.tensor([0.]).to(m.weight.device)
                 one = torch.tensor([1.]).to(m.weight.device)
@@ -163,7 +163,7 @@ def prune_random_erk(model, density):
     score_list = {}
 
     for n, m in model.named_modules():
-        if isinstance(m, (ConvMask)):
+        if isinstance(m, (ConvMask, Conv1dMask)):
             score_list[n] = (m.mask.to(m.weight.device) * torch.randn_like(m.weight).to(m.weight.device)).detach().abs_()
 
             sparsity_list.append(torch.tensor(m.weight.shape).sum() / m.weight.numel())
@@ -180,7 +180,7 @@ def prune_random_erk(model, density):
     total_den = 0
     cnt = 0
     for n, m in model.named_modules():
-        if isinstance(m, (ConvMask)):
+        if isinstance(m, (ConvMask, Conv1dMask)):
             global_scores = torch.flatten(score_list[n])
             k = int((1 - sparsity_list[cnt]) * global_scores.numel())
             if k == 0:
@@ -212,7 +212,7 @@ def prune_snip(model, trainloader, density):
     
     score_list = {}
     for n, m in model.named_modules():
-        if isinstance(m, (ConvMask)):
+        if isinstance(m, (ConvMask, Conv1dMask)):
             score_list[n] = (m.weight.grad * m.weight * m.mask.to(m.weight.device)).detach().abs_()
     
     global_scores = torch.cat([torch.flatten(v) for v in score_list.values()])
@@ -223,7 +223,7 @@ def prune_snip(model, trainloader, density):
         total_num = 0
         total_den = 0
         for n, m in model.named_modules():
-            if isinstance(m, (ConvMask)):
+            if isinstance(m, (ConvMask, Conv1dMask)):
                 score = score_list[n].to(m.weight.device)
                 zero = torch.tensor([0.]).to(m.weight.device)
                 one = torch.tensor([1.]).to(m.weight.device)
@@ -265,7 +265,7 @@ def prune_synflow(model, trainloader, density):
     
     score_list = {}
     for n, m in model.named_modules():
-        if isinstance(m, (ConvMask)):
+        if isinstance(m, (ConvMask, Conv1dMask)):
             score_list[n] = (m.mask.to(m.weight.device) * m.weight.grad * m.weight).detach().abs_()
     
     model.zero_grad()
@@ -280,7 +280,7 @@ def prune_synflow(model, trainloader, density):
         total_num = 0
         total_den = 0
         for n, m in model.named_modules():
-            if isinstance(m, (ConvMask)):
+            if isinstance(m, (ConvMask, Conv1dMask)):
                 score = score_list[n].to(m.weight.device)
                 zero = torch.tensor([0.]).to(m.weight.device)
                 one = torch.tensor([1.]).to(m.weight.device)
@@ -297,7 +297,7 @@ def prune_random_balanced(model, density):
         l = 0
         sparsity_list = []
         for n, m in model.named_modules():
-            if isinstance(m, (ConvMask, LinearMask)):
+            if isinstance(m, (ConvMask, Conv1dMask)):
                 total_params += m.weight.numel()
                 l += 1
         L = l
@@ -305,7 +305,7 @@ def prune_random_balanced(model, density):
         score_list = {}
         l = 0
         for n, m in model.named_modules():
-            if isinstance(m, (ConvMask, LinearMask)):
+            if isinstance(m, (ConvMask, Conv1dMask)):
                 score_list[n] = (m.mask.to(m.weight.device) * torch.randn_like(m.weight).to(m.weight.device)).detach().abs_()
 
                 if X / m.weight.numel() < 1.0:
@@ -321,7 +321,7 @@ def prune_random_balanced(model, density):
         total_den = 0
         cnt = 0
         for n, m in model.named_modules():
-            if isinstance(m, (ConvMask, LinearMask)):
+            if isinstance(m, (ConvMask, Conv1dMask)):
                 global_scores = torch.flatten(score_list[n])
                 k = int((1 - sparsity_list[cnt]) * global_scores.numel())
                 if k == 0:
@@ -346,7 +346,7 @@ def prune_er_erk(model, er_sparse_init):
     num_params_list = []
     total_params = 0
     for n, m in model.named_modules():
-        if isinstance(m, (ConvMask, LinearMask)):
+        if isinstance(m, (ConvMask, Conv1dMask)):
             sparsity_list.append(torch.tensor(m.weight.shape).sum() / m.weight.numel())
             num_params_list.append(m.weight.numel())
             total_params += m.weight.numel()
@@ -357,7 +357,7 @@ def prune_er_erk(model, er_sparse_init):
     sparsity_list = [torch.clamp(C*s, 0, 1) for s in sparsity_list]
     l = 0
     for n, m in model.named_modules():
-        if isinstance(m, (ConvMask, LinearMask)):
+        if isinstance(m, (ConvMask, Conv1dMask)):
             m.set_er_mask(sparsity_list[l])
             l += 1
     print(sparsity_list)
@@ -367,14 +367,14 @@ def prune_er_balanced(model, er_sparse_init):
     l = 0
     sparsity_list = []
     for n, m in model.named_modules():
-        if isinstance(m, (ConvMask, LinearMask)):
+        if isinstance(m, (ConvMask, Conv1dMask)):
             total_params += m.weight.numel()
             l += 1
     L = l
     X = er_sparse_init * total_params / l
     l = 0
     for n, m in model.named_modules():
-        if isinstance(m, (ConvMask, LinearMask)):
+        if isinstance(m, (ConvMask, Conv1dMask)):
             if X / m.weight.numel() < 1.0:
                 sparsity_list.append(X / m.weight.numel())
             else: 
@@ -386,7 +386,7 @@ def prune_er_balanced(model, er_sparse_init):
 
     l = 0
     for n, m in model.named_modules():
-        if isinstance(m, (ConvMask, LinearMask)):
+        if isinstance(m, (ConvMask, Conv1dMask)):
             m.set_er_mask(sparsity_list[l])
             l += 1
     print(sparsity_list)

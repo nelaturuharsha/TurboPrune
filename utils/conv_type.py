@@ -52,10 +52,6 @@ class LinearMask(nn.Linear):
         temp[temp!=0] = 1
         return (100 - temp.mean().item()*100), temp.numel(), 0
 
-import torch
-import torch.nn.functional as F
-import torch.nn as nn
-
 class Conv1dMask(nn.Conv1d):
     def __init__(self, in_features, out_features, bias=False):
         super().__init__(
@@ -123,7 +119,7 @@ def replace_layers(conv_type, model):
                 bias=layer.bias is not None
             )
             setattr(parent_module, parts[-1], conv_mask_layer)
-
+    print(model)
     return model
 
         
