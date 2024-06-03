@@ -22,8 +22,8 @@ As it stands, ResNets, VGG variants should work out of the box. If you run into 
 
 ### Pruning Algorithms included:
 1. **Iterative Magnitude Pruning (IMP)** from [The Lottery Ticket Hypothesis: Finding Sparse, Trainable Neural Networks](https://arxiv.org/abs/1803.03635)
-3. **Iterative Magnitude Pruning with Weight Rewinding (IMP + WR)** from [Stabilizing the lottery ticket hypothesis](https://arxiv.org/abs/1903.01611)
-4. **Iterative Magnitude Pruning with Learning Rate Rewinding (IMP + LRR)** [Comparing Rewinding and Fine-tuning in Neural Network Pruning](https://arxiv.org/abs/2003.02389)
+3. **IMP with Weight Rewinding (IMP + WR)** from [Stabilizing the lottery ticket hypothesis](https://arxiv.org/abs/1903.01611)
+4. **IMP with Learning Rate Rewinding (IMP + LRR)** [Comparing Rewinding and Fine-tuning in Neural Network Pruning](https://arxiv.org/abs/2003.02389)
 5. **SNIP:** from [SNIP: Single-shot Network Pruning based on Connection Sensitivity](https://arxiv.org/abs/1810.02340)
 6. **SynFlow:** [https://arxiv.org/abs/2006.05467](https://arxiv.org/abs/2006.05467)
 7. **Random Balanced/ERK Pruning** from [Why Random Pruning Is All We Need to Start Sparse](https://proceedings.mlr.press/v202/gadhikar23a/gadhikar23a.pdf)
@@ -73,8 +73,9 @@ and it should start :)
 
 
 ----------------
-This code is built using references to the substantial hard work put in by [Advait Gadhikar](https://advaitgadhikar.github.io/). Thank you to [Dr. Rebekka Burkholz](https://cispa.de/de/people/c01rebu) for the opportunity to build this :)
-I was heavily influenced by the code style [here](https://github.com/libffcv/ffcv-imagenet). Just a general thanks and shout-out to the FFCV team for all they've done!
-All credit/references for the original methods due to the original authors of the work :)
+Footnotes and Acknowledgments:
+-- This code is built using references to the substantial hard work put in by [Advait Gadhikar](https://advaitgadhikar.github.io/). 
+-- Thank you to [Dr. Rebekka Burkholz](https://cispa.de/de/people/c01rebu) for the opportunity to build this :)
+-- I was heavily influenced by the code style [here](https://github.com/libffcv/ffcv-imagenet). Just a general thanks and shout-out to the FFCV team for all they've done!
 
-
+All credit/references for the original methods are due to the original authors of the work :)
