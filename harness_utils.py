@@ -22,13 +22,10 @@ def reset_weights(expt_dir, model, training_type):
     return model
 
 def reset_optimizer(expt_dir, optimizer, training_type):
-    if training_type == 'imp':
+    if training_type in {'imp', 'lrr'}:
         optimizer.load_state_dict(torch.load(os.path.join(expt_dir, 'artifacts', 'optimizer_init.pt')))
     elif training_type == 'wr':
         optimizer.load_state_dict(torch.load(os.path.join(expt_dir, 'artifacts', 'optimizer_rewind.pt')))
-    else:
-        print('probably LRR, aint nothing to do')
-        return optimizer
     
     return optimizer
     

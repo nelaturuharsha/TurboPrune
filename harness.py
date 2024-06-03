@@ -130,7 +130,7 @@ class Harness:
                             batch_size  = batch_size,
                             num_workers = num_workers,
                             order       = OrderOption.SEQUENTIAL,
-                            drop_last   = False,
+                            drop_last   = False, 
                             pipelines   = { 'image' : val_image_pipeline,
                                             'label' : label_pipeline},
                             distributed = distributed,
@@ -166,6 +166,7 @@ class Harness:
             _, predicted = outputs.max(1)
             total += targets.size(0)
             correct += predicted.eq(targets).sum().item()
+
         self.scheduler.step()
         train_loss /= (len(self.train_loader))
         accuracy = 100. * (correct / total)
@@ -242,7 +243,8 @@ class Harness:
                 save_matching = (level == 0) and (training_type == 'wr') and (epoch == 9)
                 if save_matching and self.gpu_id == 0:
                     torch.save(self.model.module.state_dict(), os.path.join(self.expt_dir, 'checkpoints', 'model_rewind.pt'))
-                    torch.save(self.optimizer.state_dict(), os.path.join(self.expt_dir, 'checkpoints', 'optimizer_rewind.pt'))
+                    torch.save(self.optimizer.state_dict(), os.path.join(self.expt_dir, 'artifacts', 'optimizer_rewind.pt'))
+
 
         if self.gpu_id == 0:
             pd.DataFrame(sparsity_level_df).to_csv(os.path.join(self.expt_dir, 'metrics', 'epochwise_metrics', f'level_{level}_metrics.csv'))
@@ -279,7 +281,8 @@ def main(rank, model, level, expt_dir):
     config.augment_argparse(parser)
     config.collect_argparse_args(parser)
     config.validate(mode='stderr')
-    global data_df
+
+    #num_cycles = config['experiment_params.num_cycles']
 
     harness = Harness(model=model, expt_dir=expt_dir, gpu_id=rank)
 
@@ -289,7 +292,8 @@ def main(rank, model, level, expt_dir):
     if (level == 0) and (rank == 0):
         torch.save(harness.optimizer.state_dict(), os.path.join(expt_dir, 'artifacts', 'optimizer_init.pt'))
         torch.save(harness.model.module.state_dict(), os.path.join(expt_dir, 'checkpoints', 'model_init.pt'))
-
+    
+    #for cycle in range(num_cycles):
     harness.train_one_level(level=level)
 
     if rank == 0:
@@ -310,7 +314,11 @@ if __name__ == '__main__':
     prune_harness = pruning_utils.PruningStuff()
 
     num_levels = config['experiment_params.num_levels']
-    thresholds = [(1 - config['prune_params.prune_rate']) ** (level) for level in range(num_levels)]
+
+    resume_level = config['experiment_params.resume_from_level']
+    ## if you don't explicitly mention the resume level in the config it will start from level 0 by default
+    thresholds = [(1 - config['prune_params.prune_rate']) ** (level) for level in range(resume_level, num_levels)]
+
 
     expt_dir = create_experiment_dir_name(config['experiment_params.expt_setup']) 
 
@@ -329,9 +337,9 @@ if __name__ == '__main__':
         if level != 0:
             print(f'Pruning Model at level: {level}')
             prune_harness.load_from_ckpt(os.path.join(expt_dir, 'checkpoints', f'model_level_{level-1}.pt'))
-            prune_harness.model = reset_weights(expt_dir=expt_dir, model=prune_harness.model, training_type=config['experiment_params.training_type'])
-            
             prune_harness.level_pruner(density=thresholds[level])
+            prune_harness.model = reset_weights(expt_dir=expt_dir, model=prune_harness.model, training_type=config['experiment_params.training_type']) 
+
             print_sparsity_info(prune_harness.model)
         
         mp.spawn(main, args=(prune_harness.model, level, expt_dir), nprocs=world_size, join=True)

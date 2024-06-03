@@ -29,7 +29,9 @@ Section('experiment_params', 'parameters to train model').params(
     epochs_per_level=Param(int, 'number of epochs per level', required=True),
     num_levels=Param(int, 'number of pruning levels', required=True),
     training_type=Param(And(str, OneOf(['imp', 'wr', 'lrr'])), required=True),
-    expt_setup=Param(And(str, OneOf(['cispa', 'others'])), required=True))
+    expt_setup=Param(And(str, OneOf(['cispa', 'others'])), required=True),
+    resume_from_level=Param(int, 'level to resume from', default=0)) 
+
 
 Section('optimizer', 'data related stuff').params(
     lr=Param(float, 'Name of dataset', required=True),
@@ -43,5 +45,5 @@ Section('optimizer', 'data related stuff').params(
 Section('dist', 'distributed parameters').params(
     distributed=Param(bool, 'use distributed training', default=True),
     address=Param(str, 'default address', default='localhost'),
-    port=Param(str, 'default port', default='12345'),
-)
+    port=Param(str, 'default port', default='12345'),)
+
