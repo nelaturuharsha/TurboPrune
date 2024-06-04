@@ -71,6 +71,15 @@ and it should start :)
 ### CIFAR10 Baselines
 ![cifar10](assets/cifar10.png)
 
+If you use this code in your research, and find it useful in general -- please consider citing using:
+```
+@software{Nelaturu_TurboPrune_High-Speed_Distributed,
+author = {Nelaturu, Sree Harsha and Gadhikar, Advait and Burkholz, Rebekka},
+license = {Apache-2.0},
+title = {{TurboPrune: High-Speed  Distributed Lottery Ticket Training}},
+url = {https://github.com/nelaturuharsha/TurboPrune}}
+```
+
 
 ----------------
 Footnotes and Acknowledgments:
