@@ -66,10 +66,10 @@ python harness.py --config configs/resnet18_lrr_imagenet.yaml
 and it should start :)
 
 ### ImageNet Baselines
-<div style="display: flex; justify-content: center; align-items: center;">
-    <img src="assets/imagenet.png" width="425" height="300" style="margin-right: 10px;">
-    <img src="assets/imagenet2.png" width="425" height="300">
-</div>
+![imagenet](assets/imagenet.png)
+
+### CIFAR10 Baselines
+![cifar10](assets/cifar10.png)
 
 
 ----------------
