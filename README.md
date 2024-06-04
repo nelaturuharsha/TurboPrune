@@ -82,7 +82,7 @@ url = {https://github.com/nelaturuharsha/TurboPrune}}
 
 
 ----------------
-Footnotes and Acknowledgments:
+#### Footnotes and Acknowledgments:
 - This code is built using references to the substantial hard work put in by [Advait Gadhikar](https://advaitgadhikar.github.io/).
 -  Thank you to [Dr. Rebekka Burkholz](https://cispa.de/de/people/c01rebu) for the opportunity to build this :)
 -  I  was heavily influenced by the code style [here](https://github.com/libffcv/ffcv-imagenet). Just a general thanks and shout-out to the FFCV team for all they've done!
