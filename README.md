@@ -18,7 +18,7 @@ In this repository, we implement a training harness which enables finding lotter
 4. SVHN (to be added)
 
 ### Networks supported
-As it stands, ResNets, VGG variants should work out of the box. If you run into issues with any other variant happy to look into.
+As it stands, ResNets, VGG variants should work out of the box. If you run into issues with any other variant happy to look into. For CIFAR based datasets, there are modification to the basic architecture based on tuning and references such as this [repository](https://github.com/huyvnphan/PyTorch_CIFAR10/blob/master/cifar10_models/vgg.py).
 
 ### Pruning Algorithms included:
 1. **Iterative Magnitude Pruning (IMP)** from [The Lottery Ticket Hypothesis: Finding Sparse, Trainable Neural Networks](https://arxiv.org/abs/1803.03635)
