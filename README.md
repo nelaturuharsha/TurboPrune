@@ -1,4 +1,4 @@
-## Finding Lottery Tickets in Deep Neural Networks (+ Distributed Training)
+## TurboPrune: High-Speed Distributed Lottery Ticket Training
 
 In this repository, we implement a training harness which enables finding lottery tickets in deep CNNs on ImageNet and CIFAR datasets. The hope is this is able to make pruning research easier/faster :)!
 
