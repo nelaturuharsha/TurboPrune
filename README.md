@@ -33,7 +33,7 @@ As it stands, ResNets, VGG variants should work out of the box. If you run into 
 1. **harness.py**: contains the training harness for actually training the network, has the requisite setup for DDP.
 2. **harness_params.py**: Provides the parameters to be provided via config (fastargs), they are defined here. Please refer to the code, or [documentation]() for usage directions.
 3. **harness_utils.py**: contains methods used for rewinding the weights, optimizer and other nice things we need to make this training work.
-4. **utils/conv_type**: has the layers definitons and the model pre-processing function to insert the mask parameters as a buffer into those layers. This is what you probably want to edit for adding support for > insert custom SOTA architecture here.
+4. **utils/conv_type**: has the layers definitions and the model pre-processing function to insert the mask parameters as a buffer into those layers. This is what you probably want to edit for adding support for > insert custom SOTA architecture here.
 5. **utils/dataset.py**: definiton for CIFAR10/CIFAR100, DDP or otherwise.
 6. **utils/schedulers.py**: learning rate schedulers, for when you need to use them. The default config has what works best.
 7. **utils/pruning_utils.py**: Pruning harness.
