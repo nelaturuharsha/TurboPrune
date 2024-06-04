@@ -1,0 +1,40 @@
+# This CITATION.cff file was generated with cffinit.
+# Visit https://bit.ly/cffinit to generate yours today!
+
+cff-version: 1.2.0
+title: >-
+  TurboPrune: High-Speed  Distributed Lottery Ticket
+  Training
+message: >-
+  If you use this software, please cite it using the
+  metadata from this file.
+type: software
+authors:
+  - given-names: Sree Harsha
+    family-names: Nelaturu
+    email: nelaturu.harsha@gmail.com
+    affiliation: CISPA Helmholtz Institute for Information Security
+  - given-names: Advait
+    family-names: Gadhikar
+    email: advait.gadhikar@cispa.de
+    affiliation: CISPA Helmholtz Institute for Information Security
+  - given-names: Rebekka
+    family-names: Burkholz
+    email: burkholz@cispa.de
+    affiliation: CISPA Helmholtz Institute for Information Security
+identifiers:
+  - type: url
+    value: 'https://github.com/nelaturuharsha/TurboPrune'
+    description: High-Speed Distributed Lottery Ticket Training
+repository-code: 'https://github.com/nelaturuharsha/TurboPrune'
+abstract: >-
+  In this repository, we implement a training harness which
+  enables finding lottery tickets in deep CNNs on ImageNet
+  and CIFAR datasets. The hope is this is able to make
+  pruning research easier/faster :)!
+keywords:
+  - lottery tickets
+  - sparsity
+  - distributed
+  - deep neural networks
+license: Apache-2.0
