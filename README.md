@@ -41,10 +41,10 @@ As it stands, ResNets, VGG variants should work out of the box. If you run into 
 - Pruning within the training harness itself is not very stable w.r.t DDP and probably not the right way (also the harness is supposed to just train the network anyway). 
 - This file contains all the criterion we use for pruning (those in the previous section) and a pruning harness to prune before you train :) -- hopefully this is useful. 
 - Pruning harness can be called at the beginning for 
-    -- Pruning at Initialization (PaI), 
-    -- one-shot pruning or 
-    -- At each level for an iterative method. 
-    -- Where necessary, it will use a GPU/Dataset.
+    - Pruning at Initialization (PaI),
+    - one-shot pruning or
+    - At each level for an iterative method.
+    - Where necessary, it will use a GPU/Dataset.
 
 8. **utils/single_gpu_harness.py** - without all the fancy DDP stuff, straightforward and simple.
 
@@ -83,8 +83,8 @@ url = {https://github.com/nelaturuharsha/TurboPrune}}
 
 ----------------
 Footnotes and Acknowledgments:
--- This code is built using references to the substantial hard work put in by [Advait Gadhikar](https://advaitgadhikar.github.io/). 
--- Thank you to [Dr. Rebekka Burkholz](https://cispa.de/de/people/c01rebu) for the opportunity to build this :)
--- I was heavily influenced by the code style [here](https://github.com/libffcv/ffcv-imagenet). Just a general thanks and shout-out to the FFCV team for all they've done!
+- This code is built using references to the substantial hard work put in by [Advait Gadhikar](https://advaitgadhikar.github.io/).
+-  Thank you to [Dr. Rebekka Burkholz](https://cispa.de/de/people/c01rebu) for the opportunity to build this :)
+-  I  was heavily influenced by the code style [here](https://github.com/libffcv/ffcv-imagenet). Just a general thanks and shout-out to the FFCV team for all they've done!
 
 All credit/references for the original methods are due to the original authors of the work :)
