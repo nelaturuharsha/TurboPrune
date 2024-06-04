@@ -87,4 +87,4 @@ url = {https://github.com/nelaturuharsha/TurboPrune}}
 -  Thank you to [Dr. Rebekka Burkholz](https://cispa.de/de/people/c01rebu) for the opportunity to build this :)
 -  I  was heavily influenced by the code style [here](https://github.com/libffcv/ffcv-imagenet). Just a general thanks and shout-out to the FFCV team for all they've done!
 
-All credit/references for the original methods are due to the original authors of the work :)
+All credit/references for the original methods and reference implementations are due to the original authors of the work :)
