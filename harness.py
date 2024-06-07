@@ -47,14 +47,12 @@ torch.set_num_threads(1)
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
 
-
-set_seed(1234)
-
 class Harness:
     def __init__(self, gpu_id, expt_dir, model=None):
         self.config = get_current_config()
         self.gpu_id = gpu_id
         self.this_device = f'cuda:{self.gpu_id}'
+        self.criterion = nn.CrossEntropyLoss()
 
         if 'CIFAR' not in self.config['dataset.dataset_name']:
             self.train_loader, self.test_loader = self.create_train_loader(), self.create_test_loader()
@@ -133,7 +131,6 @@ class Harness:
         self.optimizer = optim.SGD(self.model.parameters(), lr=lr, momentum=momentum, weight_decay=weight_decay)
         scheduler = getattr(schedulers, scheduler_type)
         self.scheduler = scheduler(optimizer=self.optimizer)
-        self.criterion = nn.CrossEntropyLoss()
 
     def train_one_epoch(self, epoch):
         if 'CIFAR' in self.config['dataset.dataset_name']:
@@ -238,10 +235,9 @@ class Harness:
                 sparsity_level_df['test_acc'].append(te_a)
 
                 save_matching = (level == 0) and (training_type == 'wr') and (epoch == 9)
-                if save_matching and self.gpu_id == 0:
+                if save_matching and (self.gpu_id == 0):
                     torch.save(self.model.module.state_dict(), os.path.join(self.expt_dir, 'checkpoints', 'model_rewind.pt'))
                     torch.save(self.optimizer.state_dict(), os.path.join(self.expt_dir, 'artifacts', 'optimizer_rewind.pt'))
-
 
         if self.gpu_id == 0:
             pd.DataFrame(sparsity_level_df).to_csv(os.path.join(self.expt_dir, 'metrics', 'epochwise_metrics', f'level_{level}_metrics.csv'))
@@ -271,15 +267,15 @@ def setup_distributed(address, port, gpu_id):
     torch.cuda.set_device(gpu_id)
 
 def main(rank, model, level, expt_dir):
+
     config = get_current_config()
     parser = ArgumentParser()
     config.augment_argparse(parser)
     config.collect_argparse_args(parser)
     config.validate(mode='stderr')
+    set_seed()
     setup_distributed(gpu_id=rank)
     
-    #num_cycles = config['experiment_params.num_cycles']
-
     harness = Harness(model=model, expt_dir=expt_dir, gpu_id=rank)
 
     if level != 0:
@@ -289,7 +285,6 @@ def main(rank, model, level, expt_dir):
         torch.save(harness.optimizer.state_dict(), os.path.join(expt_dir, 'artifacts', 'optimizer_init.pt'))
         torch.save(harness.model.module.state_dict(), os.path.join(expt_dir, 'checkpoints', 'model_init.pt'))
     
-    #for cycle in range(num_cycles):
     harness.train_one_level(level=level)
 
     if rank == 0:
@@ -299,6 +294,9 @@ def main(rank, model, level, expt_dir):
     dist.destroy_process_group()
 
 if __name__ == '__main__':
+    world_size = torch.cuda.device_count()
+    print(f'Training on {world_size} GPUs')
+
     config = get_current_config()
     parser = ArgumentParser()
     config.augment_argparse(parser)
@@ -309,34 +307,22 @@ if __name__ == '__main__':
 
     prune_harness = pruning_utils.PruningStuff()
 
-    num_levels = config['experiment_params.num_levels']
+    # if you provide resume level and resume experiment directory, it will pick up from where it stopped automatically
+    resume_level = config['experiment_params.resume_level']
+    expt_dir = gen_expt_dir()
+    save_config(expt_dir=expt_dir, config=config)
+    densities = generate_densities()
 
-    resume_level = config['experiment_params.resume_from_level']
-    ## if you don't explicitly mention the resume level in the config it will start from level 0 by default
-    thresholds = [(1 - config['prune_params.prune_rate']) ** (level) for level in range(resume_level, num_levels)]
-
-
-    expt_dir = create_experiment_dir_name(config['experiment_params.expt_setup']) 
-
-    if not os.path.exists(expt_dir):
-        os.makedirs(expt_dir)
-        os.makedirs(f'{expt_dir}/checkpoints')
-        os.makedirs(f'{expt_dir}/metrics')
-        os.makedirs(f'{expt_dir}/metrics/epochwise_metrics')
-        os.makedirs(f'{expt_dir}/artifacts/')
-    
-    world_size = torch.cuda.device_count()
-    print(f'Training on {world_size} GPUs')
-    print_sparsity_info(prune_harness.model)
-
-    for level in range(len(thresholds)):
+    for level in range(resume_level, len(densities)):
+        print_sparsity_info(prune_harness.model, verbose=False)
         if level != 0:
             print(f'Pruning Model at level: {level}')
             prune_harness.load_from_ckpt(os.path.join(expt_dir, 'checkpoints', f'model_level_{level-1}.pt'))
-            prune_harness.level_pruner(density=thresholds[level])
+            #_ = compute_perturbation(prune_harness.model, density=thresholds[level]) --> currently only supports CIFAR-like datasets
+            prune_harness.level_pruner(density=densities[level])
             prune_harness.model = reset_weights(expt_dir=expt_dir, model=prune_harness.model, training_type=config['experiment_params.training_type']) 
 
-            print_sparsity_info(prune_harness.model)
+            print_sparsity_info(prune_harness.model, verbose=False)
         
         mp.spawn(main, args=(prune_harness.model, level, expt_dir), nprocs=world_size, join=True)
         print(f'Training level {level} complete, moving on to {level+1}')
