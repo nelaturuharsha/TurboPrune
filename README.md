@@ -65,11 +65,11 @@ python harness.py --config configs/resnet18_lrr_imagenet.yaml
 
 and it should start :)
 
-### ImageNet Baselines
-![imagenet](assets/imagenet.png)
-
 ### CIFAR10 Baselines
-![cifar10](assets/cifar10.png)
+![cifar10](assets/cifar10_baseline.png)
+
+### CIFAR100 Baselines
+![cifar100](assets/cifar100_baseline.png)
 
 If you use this code in your research, and find it useful in general -- please consider citing using:
 ```
