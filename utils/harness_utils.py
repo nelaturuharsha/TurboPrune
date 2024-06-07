@@ -90,12 +90,13 @@ def print_sparsity_info(model, verbose=True):
 @param('experiment_params.base_dir')
 @param('experiment_params.resume_level')
 @param('experiment_params.resume_expt_name')
-def gen_expt_dir(base_dir, resume_level, resume_expt_name):
+def gen_expt_dir(base_dir, resume_level, resume_expt_name=None):
     if resume_level != 0 and resume_expt_name:
         expt_dir = os.path.join(base_dir, resume_expt_name)
 
         print(f'Resuming from Level -- {resume_level}')
     elif resume_level == 0 and resume_expt_name is None:
+        print('Creating this Folder :)')
         current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
         unique_id = uuid.uuid4().hex[:6]
         

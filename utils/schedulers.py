@@ -4,6 +4,8 @@ from fastargs import get_current_config
 from fastargs.decorators import param
 import math
 
+import torch
+
 get_current_config()
 
 # Helper function for warmup
@@ -101,3 +103,13 @@ class CustomLRScheduler:
         lr = self.get_step_lr(self.epoch, lr=0.1 * math.sqrt(4))
         for param_group in self.optimizer.param_groups:
             param_group['lr'] = lr
+
+@param('experiment_params.epochs_per_level')
+def TriangularSchedule(optimizer, epochs_per_level, steps_per_epoch):
+    total_train_steps = steps_per_epoch * epochs_per_level
+    lr_schedule = np.interp(np.arange(1+total_train_steps),
+        [0, int(0.2 * total_train_steps), total_train_steps],
+        [0.2, 1, 0]) # Triangular learning rate schedule
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_schedule.__getitem__)
+
+    return scheduler

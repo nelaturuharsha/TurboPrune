@@ -130,7 +130,10 @@ class Harness:
     def create_optimizers(self, lr, momentum, weight_decay, scheduler_type):
         self.optimizer = optim.SGD(self.model.parameters(), lr=lr, momentum=momentum, weight_decay=weight_decay)
         scheduler = getattr(schedulers, scheduler_type)
-        self.scheduler = scheduler(optimizer=self.optimizer)
+        if scheduler_type == 'TriangularSchedule':
+            self.scheduler = scheduler(optimizer=self.optimizer, steps_per_epoch=len(self.train_loader))
+        else:
+            self.scheduler = scheduler(optimizer=self.optimizer)
 
     def train_one_epoch(self, epoch):
         if 'CIFAR' in self.config['dataset.dataset_name']:
@@ -159,7 +162,11 @@ class Harness:
             total += targets.size(0)
             correct += predicted.eq(targets).sum().item()
 
-        self.scheduler.step()
+            if self.config['optimizer.scheduler_type'] == 'TriangularSchedule':
+                self.scheduler.step()
+        
+        if self.config['optimizer.scheduler_type'] != 'TriangularSchedule':
+            self.scheduler.step()
         train_loss /= (len(self.train_loader))
         accuracy = 100. * (correct / total)
         return train_loss, accuracy

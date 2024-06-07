@@ -167,3 +167,4 @@ checkpoints/
 .DS_Store
 experiment_*
 *.sh
+baselines/
