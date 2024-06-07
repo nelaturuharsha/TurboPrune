@@ -60,7 +60,7 @@ To start an experiment, ensure there is appropriate (sufficient) compute (or it 
 
 ```bash
 pip install -r requirements.txt
-python harness.py --config configs/resnet18_lrr_imagenet.yaml
+python harness.py --config configs/resnet18_lrr_imagenet.yaml --dataset.data_root <PATH_TO_FOLDER>
 ```
 
 and it should start :)
