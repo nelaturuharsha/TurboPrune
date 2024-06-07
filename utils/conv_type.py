@@ -53,7 +53,7 @@ class LinearMask(nn.Linear):
         return (100 - temp.mean().item()*100), temp.numel(), 0
 
 class Conv1dMask(nn.Conv1d):
-    def __init__(self, in_features, out_features, bias=False):
+    def __init__(self, in_features, out_features, bias=True):
         super().__init__(
             in_channels=in_features,
             out_channels=out_features,
@@ -61,7 +61,7 @@ class Conv1dMask(nn.Conv1d):
             stride=1,
             bias=bias
         )
-
+        
         self.register_buffer('mask', torch.ones_like(self.weight))
             
     def forward(self, x):

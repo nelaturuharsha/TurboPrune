@@ -7,16 +7,15 @@ import torchvision.datasets as datasets
 
 from fastargs import get_current_config
 from fastargs.decorators import param
-## 
+
 
 get_current_config()
 
 class CIFARLoader:
     @param('dataset.dataset_name')
     @param('dataset.data_root')
-    @param('dataset.num_workers')
     @param('dataset.batch_size')
-    def __init__(self, dataset_name, data_root, num_workers, batch_size, distributed=False):
+    def __init__(self, dataset_name, data_root, batch_size, distributed=False):
         super(CIFARLoader, self).__init__()
 
         self.dataset = dataset_name
@@ -50,9 +49,6 @@ class CIFARLoader:
             ])
             self.dataset_class = datasets.CIFAR100
 
-        use_cuda = torch.cuda.is_available()
-
-
         trainset = self.dataset_class(
             root=self.data_root, train=True, download=True, transform=self.transform_train)
         
@@ -61,15 +57,12 @@ class CIFARLoader:
 
         if self.distributed:
             self.train_sampler = torch.utils.data.distributed.DistributedSampler(trainset, num_replicas=torch.cuda.device_count(), shuffle=True)
-            #self.test_sampler = torch.utils.data.distributed.DistributedSampler(testset, num_replicas=torch.cuda.device_count())
         else:
             self.train_sampler = None
-            self.test_sampler = None
 
         self.train_loader = torch.utils.data.DataLoader(
             trainset, batch_size=batch_size, shuffle=(self.train_sampler is None), sampler=self.train_sampler)
         
         self.test_loader = torch.utils.data.DataLoader(
             testset, batch_size=batch_size, shuffle=False)
-
 

@@ -9,27 +9,27 @@ def get_current_params():
 Section('dataset', 'dataset configuration').params(
     dataset_name=Param(And(str, OneOf(['CIFAR10', 'CIFAR100', 'ImageNet'])),'Name of dataset', required=True),
     num_classes=Param(And(int, OneOf([10, 100, 1000])), 'number of classes',required=True),
-    batch_size=Param(int, 'batch size', default=512),
+    batch_size=Param(int, 'batch size', default=256),
     num_workers=Param(int, 'num_workers', default=8),
     data_root=Param(str, 'path to betons', required=True))
 
 Section('prune_params', 'pruning configuration').params(
     prune_rate=Param(float, 'percentage of parameters to remove',required=True),
-    er_init=Param(float, 'sparse init percentage/target', required=True),
-    er_method=Param(And(OneOf(['er_erk', 'er_balanced', 'synflow', 'snip', 'just dont'])), required=True),
-    prune_method=Param(And(OneOf(['random_erk', 'random_balanced', 'synflow', 'snip', 'mag']))))
+    er_init=Param(float, 'sparse init percentage/target', default=0.2),
+    er_method=Param(And(OneOf(['er_erk', 'er_balanced', 'synflow', 'snip', 'just dont'], default='just dont'))),
+    prune_method=Param(OneOf(['random_erk', 'random_balanced', 'synflow', 'snip', 'mag']), required=True),
+    num_levels=Param(int, 'number of pruning levels', required=True),)
 
 Section('experiment_params', 'parameters to train model').params(
+    seed=Param(int, 'seed', default=0),
+    base_dir=Param(str, 'base directory', required=True, default='./experiments'),
     epochs_per_level=Param(int, 'number of epochs per level', required=True),
-    num_levels=Param(int, 'number of pruning levels', required=True),
     training_type=Param(And(str, OneOf(['imp', 'wr', 'lrr'])), required=True),
-    expt_setup=Param(And(str, OneOf(['cispa', 'others'])), required=True),
-    resume_from_level=Param(int, 'level to resume from', default=0)) 
-
+    resume_level=Param(int, 'level to resume from -- 0 if starting afresh', default=0),
+    resume_expt_name=Param(str, 'resume path', default=None)) 
 
 Section('optimizer', 'data related stuff').params(
     lr=Param(float, 'Name of dataset', required=True),
-    num_workers=Param(int, 'num_workers', default=8),
     momentum=Param(float, 'momentum', default=0.9),
     weight_decay=Param(float, 'weight decay', default=1e-4),
     warmup_epochs=Param(int, 'warmup length', default=10),

@@ -12,6 +12,7 @@ import torchvision.models as models
 from utils.conv_type import * 
 from utils.harness_params import *
 from utils.dataset import CIFARLoader
+from utils.custom_models import *
 ## fastargs
 from fastargs import get_current_config
 from fastargs.decorators import param
@@ -57,7 +58,7 @@ class PruningStuff:
     @param('dataset.data_root')
     @param('dataset.dataset_name')
     def create_train_loader(self, batch_size, num_workers, data_root, dataset_name):
-        if not 'cifar' in dataset_name:
+        if not 'CIFAR' in dataset_name:
             train_image_pipeline = [RandomResizedCropRGBImageDecoder((224, 224)),
                                 RandomHorizontalFlip(),
                                 ToTensor(),
@@ -90,12 +91,26 @@ class PruningStuff:
     @param("dataset.num_classes")
     @param("dataset.dataset_name")
     def acquire_model(self, model_name, num_classes, dataset_name):
-        model = getattr(models, model_name)(num_classes=num_classes)
+        if model_name == 'preresnet':
+            model = PreActResNet(block=PreActBlock, num_blocks=[2, 2, 2, 2])
+        else:
+            model = getattr(models, model_name)(num_classes=num_classes)
 
-        if 'CIFAR' in dataset_name:
+        if ('CIFAR' in dataset_name) and ('resnet' in model_name):
             model.conv1 = nn.Conv2d(3, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
             model.maxpool = nn.Identity()
+        if ('CIFAR' in dataset_name) and ('vgg11' in model_name):
+            model.avgpool = self.avgpool = nn.AdaptiveAvgPool2d((1, 1)) 
+            model.classifier = nn.Sequential(
+            nn.Linear(512 * 1 * 1, 4096),
+            nn.ReLU(True),
+            nn.Dropout(),
+            nn.Linear(4096, 4096),
+            nn.ReLU(True),
+            nn.Dropout(),
+            nn.Linear(4096, num_classes))
 
+        
         replace_layers(model=model)
 
         model.to(self.this_device)
@@ -117,15 +132,20 @@ class PruningStuff:
         
     @param('prune_params.prune_method')
     def level_pruner(self, prune_method, density):
-        print(f'Sparsity before pruning: {get_sparsity(self.model)}')
+        print('---' * 20)
+        print(f'Density before pruning: {get_sparsity(self.model)}')
+        print('---' * 20)
+
         prune_method_name = f'prune_{prune_method}'
         pruner_method = globals().get(prune_method_name)
         if prune_method in {'synflow', 'snip'}:
             self.model = pruner_method(self.model, self.train_loader, density)
         else:
             pruner_method(self.model, density)
-        print(f'Sparsity after pruning: {get_sparsity(self.model)}')
 
+        print('---' * 20)
+        print(f'Density after pruning: {get_sparsity(self.model)}')
+        print('---' * 20)
     def load_from_ckpt(self, path):
         self.model.load_state_dict(torch.load(path))
 
@@ -152,8 +172,7 @@ def prune_mag(model, density):
                 m.mask = torch.where(score <= threshold, zero, one)
                 total_num += (m.mask == 1).sum()
                 total_den += m.mask.numel()
-
-    print('Overall model density after magnitude pruning at current iteration = ', total_num / total_den)
+    print('Overall model density after magnitude pruning at current iteration = ', (total_num / total_den).item())
     return model
 
 def prune_random_erk(model, density):
@@ -390,4 +409,3 @@ def prune_er_balanced(model, er_sparse_init):
             m.set_er_mask(sparsity_list[l])
             l += 1
     print(sparsity_list)
-

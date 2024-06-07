@@ -7,6 +7,14 @@ import uuid
 
 import numpy as np
 import random
+import yaml
+
+
+from utils.pruning_utils import PruningStuff
+from utils.dataset import CIFARLoader
+
+from fastargs import get_current_config
+from fastargs.decorators import param
 
 def reset_weights(expt_dir, model, training_type):
     if training_type == 'imp':
@@ -79,21 +87,35 @@ def print_sparsity_info(model, verbose=True):
         
         return overall_sparsity
 
+@param('experiment_params.base_dir')
+@param('experiment_params.resume_level')
+@param('experiment_params.resume_expt_name')
+def gen_expt_dir(base_dir, resume_level, resume_expt_name):
+    if resume_level != 0 and resume_expt_name:
+        expt_dir = os.path.join(base_dir, resume_expt_name)
 
-def create_experiment_dir_name(expt_type):
-    current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
-    unique_id = uuid.uuid4().hex[:6]
-    unique_name = f"experiment_{current_time}_{unique_id}"
-
-    if expt_type == 'cispa':
-        expt_dir = f"/home/c02hane/CISPA-projects/neuron_pruning-2024/lottery-ticket-harness/{unique_name}"
+        print(f'Resuming from Level -- {resume_level}')
+    elif resume_level == 0 and resume_expt_name is None:
+        current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
+        unique_id = uuid.uuid4().hex[:6]
+        
+        unique_name = f"experiment_{current_time}_{unique_id}"
+        expt_dir = os.path.join(base_dir, unique_name)
     else:
-        expt_dir = f"./{unique_name}"
+        raise AssertionError('Either start from scratch, or provide a path to the checkpoint :)')
 
+    if not os.path.exists(expt_dir):
+        os.makedirs(expt_dir)
+        os.makedirs(f'{expt_dir}/checkpoints')
+        os.makedirs(f'{expt_dir}/metrics')
+        os.makedirs(f'{expt_dir}/metrics/epochwise_metrics')
+        os.makedirs(f'{expt_dir}/artifacts/')
+    
     return expt_dir
 
 ## seed everything
-def set_seed(seed: int = 42, is_deterministic=False) -> None:
+@param('experiment_params.seed')
+def set_seed(seed : int, is_deterministic=False) -> None:
 
     np.random.seed(seed)
     random.seed(seed)
@@ -109,3 +131,20 @@ def set_seed(seed: int = 42, is_deterministic=False) -> None:
     # Set a fixed value for the hash seed
     os.environ["PYTHONHASHSEED"] = str(seed)
     print(f"Random seed set as {seed}")
+
+@param('prune_params.prune_method')
+@param('prune_params.num_levels')
+@param('prune_params.prune_rate')
+def generate_densities(prune_method, num_levels, prune_rate):
+    densities = [(1-prune_rate)**i for i in range(num_levels)]
+
+    return densities
+
+def save_config(expt_dir, config):
+    nested_dict = {}
+    for (outer_key, inner_key), value in config.content.items():
+        if outer_key not in nested_dict:
+            nested_dict[outer_key] = {}
+        nested_dict[outer_key][inner_key] = value
+        with open(os.path.join(expt_dir, 'expt_config.yaml'),  'w') as file:
+            yaml.dump(nested_dict, file, default_flow_style=False)
