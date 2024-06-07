@@ -31,11 +31,11 @@ As it stands, ResNets, VGG variants should work out of the box. If you run into 
 
 ### Repository structure:
 1. **harness.py**: contains the training harness for actually training the network, has the requisite setup for DDP.
-2. **harness_params.py**: Provides the parameters to be provided via config (fastargs), they are defined here. Please refer to the code, or [documentation]() for usage directions.
+2. **harness_params.py**: Provides the parameters to be provided via config (fastargs), they are defined here. Please refer to the code, or [documentation](https://github.com/GuillaumeLeclerc/fastargs) for usage directions.
 3. **harness_utils.py**: contains methods used for rewinding the weights, optimizer and other nice things we need to make this training work.
 4. **utils/conv_type**: has the layers definitions and the model pre-processing function to insert the mask parameters as a buffer into those layers. This is what you probably want to edit for adding support for > insert custom SOTA architecture here.
 5. **utils/dataset.py**: definiton for CIFAR10/CIFAR100, DDP or otherwise.
-6. **utils/schedulers.py**: learning rate schedulers, for when you need to use them. The default config has what works best.
+6. **utils/schedulers.py**: learning rate schedulers, for when you need to use them. We provide a baseline config which could be improved ^^
 7. **utils/pruning_utils.py**: Pruning harness.
  
 - Pruning within the training harness itself is not very stable w.r.t DDP and probably not the right way (also the harness is supposed to just train the network anyway). 
@@ -45,8 +45,6 @@ As it stands, ResNets, VGG variants should work out of the box. If you run into 
     - one-shot pruning or
     - At each level for an iterative method.
     - Where necessary, it will use a GPU/Dataset.
-
-8. **utils/single_gpu_harness.py** - without all the fancy DDP stuff, straightforward and simple.
 
 ### Important Pre-requisites
 - To run ImageNet experiments, you obviously need ImageNet downloaded -- in addition, since we use FFCV, you would need to generate .beton files as per the instructions [here](https://github.com/libffcv/ffcv-imagenet).
