@@ -1,9 +1,9 @@
 model_params:
   conv_type: ConvMask
-  model_name: resnet18
+  model_name: resnet18 
 dataset:
-  dataset_name: ImageNet
-  num_classes: 1000
+  dataset_name: CIFAR100 
+  num_classes: 100
   batch_size: 256
   num_workers: 16
   data_root: ./ 
@@ -13,14 +13,14 @@ prune_params:
   er_method: just dont
   er_init: 0.105
 experiment_params:
-  epochs_per_level: 90
+  epochs_per_level: 150 
   num_levels: 25
-  training_type: wr 
+  training_type: lrr
   expt_setup: other 
 optimizer:
   lr: 0.1
-  scheduler_type: ImageNetLRDropsWarmup
+  scheduler_type: MultiStepLRWarmup
   warmup_epochs: 10
-  lr_min: 0.01
+  weight_decay: 5e-4
 dist_params:
-  port: 12355
+  port: 12352
