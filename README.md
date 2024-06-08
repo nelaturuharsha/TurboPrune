@@ -21,13 +21,27 @@ In this repository, we implement a training harness which enables finding lotter
 As it stands, ResNets, VGG variants should work out of the box. If you run into issues with any other variant happy to look into. For CIFAR based datasets, there are modification to the basic architecture based on tuning and references such as this [repository](https://github.com/huyvnphan/PyTorch_CIFAR10/blob/master/cifar10_models/vgg.py).
 
 ### Pruning Algorithms included:
-1. **Iterative Magnitude Pruning (IMP)** from [The Lottery Ticket Hypothesis: Finding Sparse, Trainable Neural Networks](https://arxiv.org/abs/1803.03635)
-3. **IMP with Weight Rewinding (IMP + WR)** from [Stabilizing the lottery ticket hypothesis](https://arxiv.org/abs/1903.01611)
-4. **IMP with Learning Rate Rewinding (IMP + LRR)** [Comparing Rewinding and Fine-tuning in Neural Network Pruning](https://arxiv.org/abs/2003.02389)
-5. **SNIP:** from [SNIP: Single-shot Network Pruning based on Connection Sensitivity](https://arxiv.org/abs/1810.02340)
-6. **SynFlow:** [Pruning neural networks without any data by iteratively conserving synaptic flow](https://arxiv.org/abs/2006.05467)
-7. **Random Balanced/ERK Pruning** from [Why Random Pruning Is All We Need to Start Sparse](https://proceedings.mlr.press/v202/gadhikar23a/gadhikar23a.pdf)
-8. **Random Pruning** from [The Unreasonable Effectiveness of Random Pruning: Return of the Most Naive Baseline for Sparse Training](https://openreview.net/pdf?id=VBZJ_3tz-t)
+1. - **Name:** **Iterative Magnitude Pruning (IMP)**
+   - **Type of Pruning:** Iterative
+   - **Paper:** [The Lottery Ticket Hypothesis: Finding Sparse, Trainable Neural Networks](https://arxiv.org/abs/1803.03635)
+3. - **Name:** **IMP with Weight Rewinding (IMP + WR)**
+   - **Type of Pruning:** Iterative
+   - **Paper:** [Stabilizing the lottery ticket hypothesis](https://arxiv.org/abs/1903.01611)
+4. - **Name:** **IMP with Learning Rate Rewinding (IMP + LRR)**
+   - **Type of Pruning:** Iterative
+   - **Paper:** [Comparing Rewinding and Fine-tuning in Neural Network Pruning](https://arxiv.org/abs/2003.02389)
+5. - **Name:** **SNIP:**
+   - **Type of Pruning:** Pruning at Initialization (PaI), One-shot
+   - **Paper:** [SNIP: Single-shot Network Pruning based on Connection Sensitivity](https://arxiv.org/abs/1810.02340)
+6. - **Name:** **SynFlow:**
+   - **Type of Pruning:** Pruning at Initialization (PaI), One-shot
+   - **Paper:** [Pruning neural networks without any data by iteratively conserving synaptic flow](https://arxiv.org/abs/2006.05467)
+8. - **Name:** **Random Balanced/ERK Pruning**
+   - **Type of Pruning:** Pruning at Initialization (PaI) One-shot + Iterative
+   - **Paper:** [Why Random Pruning Is All We Need to Start Sparse](https://proceedings.mlr.press/v202/gadhikar23a/gadhikar23a.pdf)
+9. - **Name:** **Random Pruning**
+   - **Type of Pruning:** Iterative
+   - **Paper:** [The Unreasonable Effectiveness of Random Pruning: Return of the Most Naive Baseline for Sparse Training](https://openreview.net/pdf?id=VBZJ_3tz-t)
 
 ### Repository structure:
 1. **harness.py**: contains the training harness for actually training the network, has the requisite setup for DDP.
@@ -62,7 +76,6 @@ python harness.py --config configs/imagenet_lrr_resnet18.yaml --dataset.data_roo
 ```
 
 and it should start.
-
 
 ## Baselines
 
