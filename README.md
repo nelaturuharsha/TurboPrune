@@ -21,25 +21,25 @@ In this repository, we implement a training harness which enables finding lotter
 As it stands, ResNets, VGG variants should work out of the box. If you run into issues with any other variant happy to look into. For CIFAR based datasets, there are modification to the basic architecture based on tuning and references such as this [repository](https://github.com/huyvnphan/PyTorch_CIFAR10/blob/master/cifar10_models/vgg.py).
 
 ### Pruning Algorithms included:
-1. - **Name:** **Iterative Magnitude Pruning (IMP)**
+1. - **Name:** Iterative Magnitude Pruning (IMP)
    - **Type of Pruning:** Iterative
    - **Paper:** [The Lottery Ticket Hypothesis: Finding Sparse, Trainable Neural Networks](https://arxiv.org/abs/1803.03635)
-3. - **Name:** **IMP with Weight Rewinding (IMP + WR)**
+3. - **Name:** IMP with Weight Rewinding (IMP + WR)
    - **Type of Pruning:** Iterative
    - **Paper:** [Stabilizing the lottery ticket hypothesis](https://arxiv.org/abs/1903.01611)
-4. - **Name:** **IMP with Learning Rate Rewinding (IMP + LRR)**
+4. - **Name:** IMP with Learning Rate Rewinding (IMP + LRR)
    - **Type of Pruning:** Iterative
    - **Paper:** [Comparing Rewinding and Fine-tuning in Neural Network Pruning](https://arxiv.org/abs/2003.02389)
-5. - **Name:** **SNIP:**
+5. - **Name:** SNIP
    - **Type of Pruning:** Pruning at Initialization (PaI), One-shot
    - **Paper:** [SNIP: Single-shot Network Pruning based on Connection Sensitivity](https://arxiv.org/abs/1810.02340)
-6. - **Name:** **SynFlow:**
+6. - **Name:** SynFlow
    - **Type of Pruning:** Pruning at Initialization (PaI), One-shot
    - **Paper:** [Pruning neural networks without any data by iteratively conserving synaptic flow](https://arxiv.org/abs/2006.05467)
-8. - **Name:** **Random Balanced/ERK Pruning**
+8. - **Name:** Random Balanced/ERK Pruning
    - **Type of Pruning:** Pruning at Initialization (PaI) One-shot + Iterative
    - **Paper:** [Why Random Pruning Is All We Need to Start Sparse](https://proceedings.mlr.press/v202/gadhikar23a/gadhikar23a.pdf)
-9. - **Name:** **Random Pruning**
+9. - **Name:** Random Pruning
    - **Type of Pruning:** Iterative
    - **Paper:** [The Unreasonable Effectiveness of Random Pruning: Return of the Most Naive Baseline for Sparse Training](https://openreview.net/pdf?id=VBZJ_3tz-t)
 
