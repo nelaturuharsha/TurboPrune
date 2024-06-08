@@ -12,6 +12,9 @@
 - End to End pipeline easily configurarable using [fastargs](https://github.com/GuillaumeLeclerc/fastargs).
 - Detailed timing comparisons, training speed scaling - will come once I have had a chance to collate all the results :)
 
+### Timing Comparison
+**Coming soon!**
+
 ### Datasets Supported
 1. CIFAR10
 2. CIFAR100
