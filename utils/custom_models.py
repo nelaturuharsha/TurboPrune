@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import Type, List
 
+
 class PreActBlock(nn.Module):
     """Pre-activation version of the BasicBlock used in a ResNet.
     The flow goes x (input) -> BN -> ReLU -> Conv instead of x (input) -> Conv -> BN -> ReLU.
@@ -12,28 +13,40 @@ class PreActBlock(nn.Module):
         planes (int): Number of output channels.
         stride (int, optional): Stride size. Default is 1.
     """
+
     expansion: int = 1
 
     def __init__(self, in_planes: int, planes: int, stride: int = 1) -> None:
         super(PreActBlock, self).__init__()
         self.bn1 = nn.BatchNorm2d(in_planes)
-        self.conv1 = nn.Conv2d(in_planes, planes, kernel_size=3, stride=stride, padding=1, bias=False)
+        self.conv1 = nn.Conv2d(
+            in_planes, planes, kernel_size=3, stride=stride, padding=1, bias=False
+        )
         self.bn2 = nn.BatchNorm2d(planes)
-        self.conv2 = nn.Conv2d(planes, planes, kernel_size=3, stride=1, padding=1, bias=False)
+        self.conv2 = nn.Conv2d(
+            planes, planes, kernel_size=3, stride=1, padding=1, bias=False
+        )
         self.shortcut = nn.Sequential()
         if stride != 1 or in_planes != self.expansion * planes:
             self.shortcut = nn.Sequential(
-                nn.Conv2d(in_planes, self.expansion * planes, kernel_size=1, stride=stride, bias=False)
+                nn.Conv2d(
+                    in_planes,
+                    self.expansion * planes,
+                    kernel_size=1,
+                    stride=stride,
+                    bias=False,
+                )
             )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass for the PreActBlock."""
         out = F.relu(self.bn1(x))
-        shortcut = self.shortcut(out) if hasattr(self, 'shortcut') else x
+        shortcut = self.shortcut(out) if hasattr(self, "shortcut") else x
         out = self.conv1(out)
         out = self.conv2(F.relu(self.bn2(out)))
         out += shortcut
         return out
+
 
 class PreActResNet(nn.Module):
     """Pre-activation ResNet model.
@@ -43,7 +56,10 @@ class PreActResNet(nn.Module):
         num_blocks (List[int]): List containing the number of blocks per layer.
         num_classes (int, optional): Number of output classes. Default is 10.
     """
-    def __init__(self, block: Type[PreActBlock], num_blocks: List[int], num_classes: int = 10) -> None:
+
+    def __init__(
+        self, block: Type[PreActBlock], num_blocks: List[int], num_classes: int = 10
+    ) -> None:
         super(PreActResNet, self).__init__()
         self.in_planes = 64
 
@@ -54,7 +70,9 @@ class PreActResNet(nn.Module):
         self.layer4 = self._make_layer(block, 512, num_blocks[3], stride=2)
         self.fc = nn.Linear(512, num_classes)
 
-    def _make_layer(self, block: Type[PreActBlock], planes: int, num_blocks: int, stride: int) -> nn.Sequential:
+    def _make_layer(
+        self, block: Type[PreActBlock], planes: int, num_blocks: int, stride: int
+    ) -> nn.Sequential:
         """Create a layer for the PreActResNet.
 
         Args:

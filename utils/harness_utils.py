@@ -16,7 +16,10 @@ from fastargs import get_current_config
 from fastargs.decorators import param
 from typing import Any, Dict
 
-def reset_weights(expt_dir: str, model: torch.nn.Module, training_type: str) -> torch.nn.Module:
+
+def reset_weights(
+    expt_dir: str, model: torch.nn.Module, training_type: str
+) -> torch.nn.Module:
     """Reset (or don't) the weight to a given checkpoint based on the provided training type.
 
     Args:
@@ -27,22 +30,31 @@ def reset_weights(expt_dir: str, model: torch.nn.Module, training_type: str) -> 
     Returns:
         torch.nn.Module: The model with reset weights.
     """
-    if training_type == 'imp':
-        original_dict = torch.load(os.path.join(expt_dir, 'checkpoints', 'model_init.pt'))
-    elif training_type == 'wr':
-        original_dict = torch.load(os.path.join(expt_dir, 'checkpoints', 'model_rewind.pt'))
+    if training_type == "imp":
+        original_dict = torch.load(
+            os.path.join(expt_dir, "checkpoints", "model_init.pt")
+        )
+    elif training_type == "wr":
+        original_dict = torch.load(
+            os.path.join(expt_dir, "checkpoints", "model_rewind.pt")
+        )
     else:
-        print('probably LRR, aint nothing to do')
+        print("probably LRR, aint nothing to do")
         return model
 
-    original_weights = dict(filter(lambda v: v[0].endswith(('.weight', '.bias')), original_dict.items()))
+    original_weights = dict(
+        filter(lambda v: v[0].endswith((".weight", ".bias")), original_dict.items())
+    )
     model_dict = model.state_dict()
     model_dict.update(original_weights)
     model.load_state_dict(model_dict)
 
     return model
 
-def reset_optimizer(expt_dir: str, optimizer: torch.optim.Optimizer, training_type: str) -> torch.optim.Optimizer:
+
+def reset_optimizer(
+    expt_dir: str, optimizer: torch.optim.Optimizer, training_type: str
+) -> torch.optim.Optimizer:
     """Reset the optimizer state based on the provided training type.
 
     Args:
@@ -53,12 +65,17 @@ def reset_optimizer(expt_dir: str, optimizer: torch.optim.Optimizer, training_ty
     Returns:
         torch.optim.Optimizer: The reset optimizer.
     """
-    if training_type in {'imp', 'lrr'}:
-        optimizer.load_state_dict(torch.load(os.path.join(expt_dir, 'artifacts', 'optimizer_init.pt')))
-    elif training_type == 'wr':
-        optimizer.load_state_dict(torch.load(os.path.join(expt_dir, 'artifacts', 'optimizer_rewind.pt')))
-    
+    if training_type in {"imp", "lrr"}:
+        optimizer.load_state_dict(
+            torch.load(os.path.join(expt_dir, "artifacts", "optimizer_init.pt"))
+        )
+    elif training_type == "wr":
+        optimizer.load_state_dict(
+            torch.load(os.path.join(expt_dir, "artifacts", "optimizer_rewind.pt"))
+        )
+
     return optimizer
+
 
 def reset_only_weights(expt_dir: str, ckpt_name: str, model: torch.nn.Module) -> None:
     """Reset only the weights of the model from a specified checkpoint.
@@ -68,11 +85,14 @@ def reset_only_weights(expt_dir: str, ckpt_name: str, model: torch.nn.Module) ->
         ckpt_name (str): Checkpoint name.
         model (torch.nn.Module): The model to reset.
     """
-    original_dict = torch.load(os.path.join(expt_dir, 'checkpoints', ckpt_name))
-    original_weights = dict(filter(lambda v: v[0].endswith(('.weight', '.bias')), original_dict.items()))
+    original_dict = torch.load(os.path.join(expt_dir, "checkpoints", ckpt_name))
+    original_weights = dict(
+        filter(lambda v: v[0].endswith((".weight", ".bias")), original_dict.items())
+    )
     model_dict = model.state_dict()
     model_dict.update(original_weights)
     model.load_state_dict(model_dict)
+
 
 def reset_only_masks(expt_dir: str, ckpt_name: str, model: torch.nn.Module) -> None:
     """Reset only the masks of the model from a specified checkpoint.
@@ -82,11 +102,14 @@ def reset_only_masks(expt_dir: str, ckpt_name: str, model: torch.nn.Module) -> N
         ckpt_name (str): Checkpoint name.
         model (torch.nn.Module): The model to reset.
     """
-    original_dict = torch.load(os.path.join(expt_dir, 'checkpoints', ckpt_name))
-    original_weights = dict(filter(lambda v: v[0].endswith('.mask'), original_dict.items()))
+    original_dict = torch.load(os.path.join(expt_dir, "checkpoints", ckpt_name))
+    original_weights = dict(
+        filter(lambda v: v[0].endswith(".mask"), original_dict.items())
+    )
     model_dict = model.state_dict()
     model_dict.update(original_weights)
     model.load_state_dict(model_dict)
+
 
 def compute_sparsity(tensor: torch.Tensor) -> (float, int, int):
     """Compute the sparsity of a given tensor. Sparsity = number of elements which are 0 in the mask.
@@ -101,6 +124,7 @@ def compute_sparsity(tensor: torch.Tensor) -> (float, int, int):
     total = tensor.numel()
     sparsity = 1.0 - (remaining / total)
     return sparsity, remaining, total
+
 
 def print_sparsity_info(model: torch.nn.Module, verbose: bool = True) -> float:
     """Print and return the sparsity information of the model.
@@ -121,24 +145,27 @@ def print_sparsity_info(model: torch.nn.Module, verbose: bool = True) -> float:
         if isinstance(layer, (ConvMask, Conv1dMask)):
             weight_mask = layer.mask
             sparsity, remaining, total = compute_sparsity(weight_mask)
-            my_table.add_row([name, sparsity, 1 - sparsity, f'{remaining}/{total}'])
+            my_table.add_row([name, sparsity, 1 - sparsity, f"{remaining}/{total}"])
             total_params += total
             total_params_kept += remaining
-    
+
     overall_sparsity = 1 - (total_params_kept / total_params)
 
     if verbose:
         print(my_table)
-        print('-----------')
+        print("-----------")
         print(f"Overall Sparsity of All Layers: {overall_sparsity:.4f}")
-        print('-----------')
-    
+        print("-----------")
+
     return overall_sparsity
 
-@param('experiment_params.base_dir')
-@param('experiment_params.resume_level')
-@param('experiment_params.resume_expt_name')
-def gen_expt_dir(base_dir: str, resume_level: int, resume_expt_name: Optional[str] = None) -> str:
+
+@param("experiment_params.base_dir")
+@param("experiment_params.resume_level")
+@param("experiment_params.resume_expt_name")
+def gen_expt_dir(
+    base_dir: str, resume_level: int, resume_expt_name: Optional[str] = None
+) -> str:
     """Create a new experiment directory and all the necessary subdirectories.
        If provided, instead of creating a new directory -- set the directory to the one provided.
 
@@ -152,26 +179,29 @@ def gen_expt_dir(base_dir: str, resume_level: int, resume_expt_name: Optional[st
     """
     if resume_level != 0 and resume_expt_name:
         expt_dir = os.path.join(base_dir, resume_expt_name)
-        print(f'Resuming from Level -- {resume_level}')
+        print(f"Resuming from Level -- {resume_level}")
     elif resume_level == 0 and resume_expt_name is None:
-        print('Creating this Folder :)')
+        print("Creating this Folder :)")
         current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
         unique_id = uuid.uuid4().hex[:6]
         unique_name = f"experiment_{current_time}_{unique_id}"
         expt_dir = os.path.join(base_dir, unique_name)
     else:
-        raise AssertionError('Either start from scratch, or provide a path to the checkpoint :)')
+        raise AssertionError(
+            "Either start from scratch, or provide a path to the checkpoint :)"
+        )
 
     if not os.path.exists(expt_dir):
         os.makedirs(expt_dir)
-        os.makedirs(f'{expt_dir}/checkpoints')
-        os.makedirs(f'{expt_dir}/metrics')
-        os.makedirs(f'{expt_dir}/metrics/epochwise_metrics')
-        os.makedirs(f'{expt_dir}/artifacts/')
-    
+        os.makedirs(f"{expt_dir}/checkpoints")
+        os.makedirs(f"{expt_dir}/metrics")
+        os.makedirs(f"{expt_dir}/metrics/epochwise_metrics")
+        os.makedirs(f"{expt_dir}/artifacts/")
+
     return expt_dir
 
-@param('experiment_params.seed')
+
+@param("experiment_params.seed")
 def set_seed(seed: int, is_deterministic: bool = False) -> None:
     """Set the random seed for reproducibility.
 
@@ -193,10 +223,13 @@ def set_seed(seed: int, is_deterministic: bool = False) -> None:
     os.environ["PYTHONHASHSEED"] = str(seed)
     print(f"Random seed set as {seed}")
 
-@param('prune_params.prune_method')
-@param('prune_params.num_levels')
-@param('prune_params.prune_rate')
-def generate_densities(prune_method: str, num_levels: int, prune_rate: float) -> list[float]:
+
+@param("prune_params.prune_method")
+@param("prune_params.num_levels")
+@param("prune_params.prune_rate")
+def generate_densities(
+    prune_method: str, num_levels: int, prune_rate: float
+) -> list[float]:
     """Generate a list of densities for pruning. The density is calculated as (1 - prune_rate) ^ i where i is the sparsity level.
        For example, if prune_rate = 0.2 and the num_levels = 5, the densities will be [1.0, 0.8, 0.64, 0.512, 0.4096].
     Args:
@@ -210,6 +243,7 @@ def generate_densities(prune_method: str, num_levels: int, prune_rate: float) ->
     densities = [(1 - prune_rate) ** i for i in range(num_levels)]
     return densities
 
+
 def save_config(expt_dir: str, config: Any) -> None:
     """Save the experiment configuration to a YAML file in the experiment directory.
 
@@ -222,6 +256,6 @@ def save_config(expt_dir: str, config: Any) -> None:
         if outer_key not in nested_dict:
             nested_dict[outer_key] = {}
         nested_dict[outer_key][inner_key] = value
-    
-    with open(os.path.join(expt_dir, 'expt_config.yaml'), 'w') as file:
+
+    with open(os.path.join(expt_dir, "expt_config.yaml"), "w") as file:
         yaml.dump(nested_dict, file, default_flow_style=False)

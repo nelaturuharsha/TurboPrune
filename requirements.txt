@@ -3,3 +3,5 @@ pandas
 numpy
 pyyaml
 tqdm
+torch
+torchvision
