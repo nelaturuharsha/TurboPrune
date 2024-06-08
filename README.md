@@ -1,6 +1,6 @@
 ## TurboPrune: High-Speed Distributed Lottery Ticket Training
 
-In this repository, we implement a training harness which enables finding lottery tickets in deep CNNs on ImageNet and CIFAR datasets. The hope is this is able to make pruning research easier/faster :)!
+In this repository, we implement a training harness which enables finding lottery tickets in deep CNNs on ImageNet and CIFAR datasets. The hope is this is able to make pruning research easier/faster!
 
 ### Key Features
 - PyTorch Distributed Data Parallel (DDP) based training harness for training the network (post-pruning) as fast as possible.
@@ -35,41 +35,49 @@ As it stands, ResNets, VGG variants should work out of the box. If you run into 
 3. **harness_utils.py**: contains methods used for rewinding the weights, optimizer and other nice things we need to make this training work.
 4. **utils/conv_type**: has the layers definitions and the model pre-processing function to insert the mask parameters as a buffer into those layers. This is what you probably want to edit for adding support for > insert custom SOTA architecture here.
 5. **utils/dataset.py**: definiton for CIFAR10/CIFAR100, DDP or otherwise.
-6. **utils/schedulers.py**: learning rate schedulers, for when you need to use them. We provide a baseline config which could be improved ^^
+6. **utils/schedulers.py**: learning rate schedulers, for when you need to use them.
 7. **utils/pruning_utils.py**: Pruning harness.
  
 - Pruning within the training harness itself is not very stable w.r.t DDP and probably not the right way (also the harness is supposed to just train the network anyway). 
-- This file contains all the criterion we use for pruning (those in the previous section) and a pruning harness to prune before you train :) -- hopefully this is useful. 
-- Pruning harness can be called at the beginning for 
-    - Pruning at Initialization (PaI),
-    - one-shot pruning or
-    - At each level for an iterative method.
-    - Where necessary, it will use a GPU/Dataset.
+- This file contains all the criterion we use for pruning (those in the previous section) and a pruning harness which has the method to call the same -- hopefully this is useful. 
+- Pruning harness can be called at the beginning 
+    - for Pruning at Initialization (PaI),
+    - for one-shot pruning or
+    - of each level for an iterative method.
+Where necessary, it will use a GPU/Dataset.
 
 ### Important Pre-requisites
 - To run ImageNet experiments, you obviously need ImageNet downloaded -- in addition, since we use FFCV, you would need to generate .beton files as per the instructions [here](https://github.com/libffcv/ffcv-imagenet).
-- CIFAR10, CIFAR100 and other stuff are handled directly where possible -- thank you torchvision!
+- CIFAR10, CIFAR100 and other stuff are handled using torchvision -- thank you torchvision!
 
 ### Usage
 
-Now to the important (fun part)
+Now to the fun part:
 
-To start an experiment, ensure there is appropriate (sufficient) compute (or it might take a while -- its going to anyway)
+To start an experiment, ensure there is appropriate (sufficient) compute (or it might take a while -- its going to anyways) and in case of ImageNet the appropriate betons available.
 
 ```bash
 pip install -r requirements.txt
-python harness.py --config configs/resnet18_lrr_imagenet.yaml --dataset.data_root <PATH_TO_FOLDER>
+python harness.py --config configs/imagenet_lrr_resnet18.yaml --dataset.data_root <PATH_TO_FOLDER>
 ```
 
-and it should start :)
+and it should start.
 
-### CIFAR10 Baselines
+
+## Baselines
+
+The configs provided in configs/ are for some tuned baselines, but if you find a better configuration -- please feel free to make a pull request. Some results
+#### ImageNet Baseline
+![imagenet](assets/imagenet_baseline.png)
+
+#### CIFAR10 Baseline
 ![cifar10](assets/cifar10_baseline.png)
 
-### CIFAR100 Baselines
+#### CIFAR100 Baseline
 ![cifar100](assets/cifar100_baseline.png)
 
 If you use this code in your research, and find it useful in general -- please consider citing using:
+
 ```
 @software{Nelaturu_TurboPrune_High-Speed_Distributed,
 author = {Nelaturu, Sree Harsha and Gadhikar, Advait and Burkholz, Rebekka},
