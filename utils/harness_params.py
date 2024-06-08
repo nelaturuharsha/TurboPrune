@@ -63,7 +63,6 @@ def get_current_params() -> None:
                         "MultiStepLRWarmup",
                         "ImageNetLRDropsWarmup",
                         "CosineLRWarmup",
-                        "CustomLRScheduler",
                         "TriangularSchedule",
                     ]
                 ),
