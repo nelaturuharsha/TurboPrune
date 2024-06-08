@@ -1,5 +1,7 @@
 ## TurboPrune: High-Speed Distributed Lottery Ticket Training
 
+
+
 In this repository, we implement a training harness which enables finding lottery tickets in deep CNNs on ImageNet and CIFAR datasets. The hope is this is able to make pruning research easier/faster!
 
 ### Key Features
@@ -10,6 +12,7 @@ In this repository, we implement a training harness which enables finding lotter
 - Simple harness, with fastargs -- easily extensible.
 - Logging to CSV (nothing fancy, but you can integrate wandb/comet/your own system easily).
 - End to End pipeline easily configurarable using [fastargs](https://github.com/GuillaumeLeclerc/fastargs).
+- GPU speed + time comparisons to comparison (TODO -- once I have enough time to format everything).
 
 ### Datasets Supported
 1. CIFAR10
