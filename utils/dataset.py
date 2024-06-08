@@ -8,14 +8,23 @@ import torchvision.datasets as datasets
 from fastargs import get_current_config
 from fastargs.decorators import param
 
+from typing import Optional
 
 get_current_config()
 
 class CIFARLoader:
+    """Data loader for CIFAR-10 and CIFAR-100 datasets.
+
+    Args:
+        dataset_name (str): Name of the dataset ('CIFAR10' or 'CIFAR100').
+        data_root (str): Directory to save the dataset which will be downloaded.
+        batch_size (int): Batch size.
+        distributed (bool, optional): Whether to use DistributedSampler for distributed training. Default is False.
+    """
     @param('dataset.dataset_name')
     @param('dataset.data_root')
     @param('dataset.batch_size')
-    def __init__(self, dataset_name, data_root, batch_size, distributed=False):
+    def __init__(self, dataset_name: str, data_root: str, batch_size: int, distributed: bool = False) -> None:
         super(CIFARLoader, self).__init__()
 
         self.dataset = dataset_name
@@ -56,7 +65,9 @@ class CIFARLoader:
             root=self.data_root, train=False, download=True, transform=self.transform_test)
 
         if self.distributed:
-            self.train_sampler = torch.utils.data.distributed.DistributedSampler(trainset, num_replicas=torch.cuda.device_count(), shuffle=True)
+            self.train_sampler = torch.utils.data.distributed.DistributedSampler(
+                trainset, num_replicas=torch.cuda.device_count(), shuffle=True
+            )
         else:
             self.train_sampler = None
 

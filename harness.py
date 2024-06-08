@@ -38,96 +38,135 @@ from ffcv.transforms import ToTensor, ToDevice, Squeeze, NormalizeImage, \
 from ffcv.fields.decoders import RandomResizedCropRGBImageDecoder, CenterCropRGBImageDecoder
 from ffcv.fields.basics import IntDecoder
 
-
-DEFAULT_CROP_RATIO = 224/256
 IMAGENET_MEAN = np.array([0.485, 0.456, 0.406]) * 255
 IMAGENET_STD = np.array([0.229, 0.224, 0.225]) * 255
-
-torch.set_num_threads(1)
-torch.backends.cuda.matmul.allow_tf32 = True
-torch.backends.cudnn.allow_tf32 = True
+DEFAULT_CROP_RATIO = 224 / 256
 
 class Harness:
-    def __init__(self, gpu_id, expt_dir, model=None):
+    """Harness class to handle training and evaluation.
+
+    Args:
+        gpu_id (int): current rank of the process while training using DDP.
+        expt_dir (str): Experiment directory to save artifacts/checkpoints/metrics to.
+        model (Optional[nn.Module], optional): The model to train.
+    """
+    def __init__(self, gpu_id: int, expt_dir: str, model : nn.Module) -> None:
         self.config = get_current_config()
         self.gpu_id = gpu_id
         self.this_device = f'cuda:{self.gpu_id}'
         self.criterion = nn.CrossEntropyLoss()
 
         if 'CIFAR' not in self.config['dataset.dataset_name']:
-            self.train_loader, self.test_loader = self.create_train_loader(), self.create_test_loader()
+            self.train_loader = self.create_train_loader()
+            self.test_loader = self.create_test_loader()
         else:
             self.loaders = CIFARLoader(distributed=True)
-            self.train_loader, self.test_loader = self.loaders.train_loader, self.loaders.test_loader
+            self.train_loader = self.loaders.train_loader
+            self.test_loader = self.loaders.test_loader
 
         model = model.to(self.this_device)
         self.model = DDP(model, device_ids=[self.gpu_id])
-
         self.create_optimizers()
-
         self.expt_dir = expt_dir 
 
     @param('dataset.batch_size')
     @param('dataset.num_workers')
     @param('dataset.data_root')
-    def create_train_loader(self, batch_size, num_workers, data_root, distributed=True):
-        train_image_pipeline = [RandomResizedCropRGBImageDecoder((224, 224)),
-                            RandomHorizontalFlip(),
-                            ToTensor(),
-                            ToDevice(torch.device(self.this_device), non_blocking=True),
-                            ToTorchImage(),
-                            NormalizeImage(IMAGENET_MEAN, IMAGENET_STD, np.float32)]
+    def create_train_loader(self, batch_size: int, num_workers: int, data_root: str, distributed: bool = True) -> Any:
+        """Create the train dataloader.
 
-        label_pipeline = [IntDecoder(),
-                            ToTensor(),
-                            Squeeze(),
-                            ToDevice(torch.device(self.this_device), non_blocking=True)]
+        Args:
+            batch_size (int): Batch size for data loading.
+            num_workers (int): Number of workers for data loading.
+            data_root (str): Root directory for data.
+            distributed (bool, optional): Whether to use distributed data loading. Default is True.
 
+        Returns:
+            Any: Train dataloader.
+        """
+        train_image_pipeline = [
+            RandomResizedCropRGBImageDecoder((224, 224)),
+            RandomHorizontalFlip(),
+            ToTensor(),
+            ToDevice(torch.device(self.this_device), non_blocking=True),
+            ToTorchImage(),
+            NormalizeImage(IMAGENET_MEAN, IMAGENET_STD, np.float32)
+        ]
 
-        train_loader = Loader(os.path.join(data_root, 'train_500_0.50_90.beton'), 
-                              batch_size  = batch_size,
-                              num_workers = num_workers,
-                              order       = OrderOption.RANDOM,
-                              os_cache    = True,
-                              drop_last   = True,
-                              pipelines   = { 'image' : train_image_pipeline,
-                                              'label' : label_pipeline},
-                              distributed = distributed,
-                              )
+        label_pipeline = [
+            IntDecoder(),
+            ToTensor(),
+            Squeeze(),
+            ToDevice(torch.device(self.this_device), non_blocking=True)
+        ]
+
+        train_loader = Loader(
+            os.path.join(data_root, 'train_500_0.50_90.beton'), 
+            batch_size=batch_size,
+            num_workers=num_workers,
+            order=OrderOption.RANDOM,
+            os_cache=True,
+            drop_last=True,
+            pipelines={'image': train_image_pipeline, 'label': label_pipeline},
+            distributed=distributed,
+        )
         
         return train_loader
 
     @param('dataset.batch_size')
     @param('dataset.num_workers')
     @param('dataset.data_root')
-    def create_test_loader(self, batch_size, num_workers, data_root, distributed=True):
-        val_image_pipeline = [CenterCropRGBImageDecoder((256, 256), ratio=DEFAULT_CROP_RATIO),
-                              ToTensor(),
-                              ToDevice(torch.device(self.this_device), non_blocking=True),
-                              ToTorchImage(),
-                              NormalizeImage(IMAGENET_MEAN, IMAGENET_STD, np.float32)]
+    def create_test_loader(self, batch_size: int, num_workers: int, data_root: str, distributed: bool = True) -> Any:
+        """Create the test dataloader.
 
-        label_pipeline = [IntDecoder(),
-                            ToTensor(),
-                            Squeeze(),
-                            ToDevice(torch.device(self.this_device), non_blocking=True)]
+        Args:
+            batch_size (int): Batch size for data loading.
+            num_workers (int): Number of workers for data loading.
+            data_root (str): Root directory for data.
+            distributed (bool, optional): Whether to use distributed data loading. Default is True.
 
-        val_loader = Loader(os.path.join(data_root, 'val_500_0.50_90.beton'),
-                            batch_size  = batch_size,
-                            num_workers = num_workers,
-                            order       = OrderOption.SEQUENTIAL,
-                            drop_last   = False, 
-                            pipelines   = { 'image' : val_image_pipeline,
-                                            'label' : label_pipeline},
-                            distributed = distributed,
-                            )
+        Returns:
+            Any: Test dataloader.
+        """
+        val_image_pipeline = [
+            CenterCropRGBImageDecoder((256, 256), ratio=DEFAULT_CROP_RATIO),
+            ToTensor(),
+            ToDevice(torch.device(self.this_device), non_blocking=True),
+            ToTorchImage(),
+            NormalizeImage(IMAGENET_MEAN, IMAGENET_STD, np.float32)
+        ]
+
+        label_pipeline = [
+            IntDecoder(),
+            ToTensor(),
+            Squeeze(),
+            ToDevice(torch.device(self.this_device), non_blocking=True)
+        ]
+
+        val_loader = Loader(
+            os.path.join(data_root, 'val_500_0.50_90.beton'),
+            batch_size=batch_size,
+            num_workers=num_workers,
+            order=OrderOption.SEQUENTIAL,
+            drop_last=False,
+            pipelines={'image': val_image_pipeline, 'label': label_pipeline},
+            distributed=distributed,
+        )
         return val_loader
 
     @param('optimizer.lr')
     @param('optimizer.momentum')
     @param('optimizer.weight_decay')
     @param('optimizer.scheduler_type')
-    def create_optimizers(self, lr, momentum, weight_decay, scheduler_type):
+    def create_optimizers(self, lr: float, momentum: float, weight_decay: float, scheduler_type: str) -> None:
+        """Instantiate the optimizer and learning rate scheduler.
+
+        Args:
+            lr (float): Initial learning rate.
+            momentum (float): Momentum for SGD.
+            weight_decay (float): Weight decay for optimizer.
+            scheduler_type (str): Type of scheduler.
+        """
         self.optimizer = optim.SGD(self.model.parameters(), lr=lr, momentum=momentum, weight_decay=weight_decay)
         scheduler = getattr(schedulers, scheduler_type)
         if scheduler_type == 'TriangularSchedule':
@@ -135,7 +174,14 @@ class Harness:
         else:
             self.scheduler = scheduler(optimizer=self.optimizer)
 
-    def train_one_epoch(self, epoch):
+    def train_one_epoch(self, epoch: int) -> (float, float):
+        """Train the model for one epoch.
+
+        Args:
+            epoch (int): Current epoch.
+        Returns:
+            (float, float): Training loss and accuracy.
+        """
         if 'CIFAR' in self.config['dataset.dataset_name']:
             self.loaders.train_sampler.set_epoch(epoch)
         model = self.model
@@ -144,7 +190,6 @@ class Harness:
         correct = 0
         total = 0
         tepoch = tqdm.tqdm(self.train_loader, unit='batch', desc=f'Epoch {epoch}')
-            
 
         for inputs, targets in tepoch:
             if 'CIFAR' in self.config['dataset.dataset_name']:
@@ -156,7 +201,7 @@ class Harness:
                 loss = self.criterion(outputs, targets)
             loss.backward()
             self.optimizer.step()
-            
+
             train_loss += loss.item()
             _, predicted = outputs.max(1)
             total += targets.size(0)
@@ -167,11 +212,16 @@ class Harness:
         
         if self.config['optimizer.scheduler_type'] != 'TriangularSchedule':
             self.scheduler.step()
-        train_loss /= (len(self.train_loader))
-        accuracy = 100. * (correct / total)
+        train_loss /= len(self.train_loader)
+        accuracy = 100.0 * (correct / total)
         return train_loss, accuracy
 
-    def test(self):
+    def test(self) -> (float, float):
+        """Evaluate the model on the test set.
+
+        Returns:
+            (float, float): Test loss and accuracy.
+        """
         model = self.model
         model.eval()
         test_loss = 0
@@ -186,31 +236,37 @@ class Harness:
                 with autocast(dtype=torch.bfloat16):
                     outputs = model(inputs)
                     loss = self.criterion(outputs, targets)
-                
+
                 test_loss += loss.item()
                 _, predicted = outputs.max(1)
                 total += targets.size(0)
                 correct += predicted.eq(targets).sum().item()
 
-        test_loss /= (len(self.test_loader))
-        accuracy = 100. * correct / total
+        test_loss /= len(self.test_loader)
+        accuracy = 100.0 * correct / total
 
         return test_loss, accuracy
 
     @param('experiment_params.epochs_per_level')
     @param('experiment_params.training_type')
-    def train_one_level(self, epochs_per_level, training_type, level):
+    def train_one_level(self, epochs_per_level: int, training_type: str, level: int) -> None:
+        """Train the model for one full level. This can thought of as one full training run.
+
+        Args:
+            epochs_per_level (int): Total number of epochs to train for at each level.
+            training_type (str): Type of training can be {'wr', 'lrr' or 'imp}.
+            level (int): Current sparsity level.
+        """
         new_table = PrettyTable()
         new_table.field_names = ["Epoch", "Train Loss", "Test Loss", "Train Acc", "Test Acc"]
         sparsity_level_df = {
-            'epoch' : [],
+            'epoch': [],
             'train_acc': [],
             'test_acc': [],
             'train_loss': [],
             'test_loss': []
         }
-        data_df = {'level' : [], 'sparsity' : [], 'max_test_acc' : [], 'final_test_acc' : []}
-
+        data_df = {'level': [], 'sparsity': [], 'max_test_acc': [], 'final_test_acc': []}
 
         for epoch in range(epochs_per_level):
             train_loss, train_acc = self.train_one_epoch(epoch)
@@ -263,18 +319,31 @@ class Harness:
                 updated_df = pd.concat([pre_df, new_df], ignore_index=True)
                 updated_df.to_csv(summary_path, index=False)
 
-
 @param('dist_params.address')
 @param('dist_params.port')
-def setup_distributed(address, port, gpu_id):
+def setup_distributed(address: str, port: int, gpu_id: int) -> None:
+    """Setup distributed training environment.
+
+    Args:
+        address (str): Master address for distributed training.
+        port (int): Master port for distributed training.
+        gpu_id (int): current rank/gpu.
+    """
     os.environ['MASTER_ADDR'] = address
     os.environ['MASTER_PORT'] = str(port)
     world_size = torch.cuda.device_count()
-    init_process_group('nccl', rank=gpu_id, world_size=world_size)
+    dist.init_process_group('nccl', rank=gpu_id, world_size=world_size)
     torch.cuda.set_device(gpu_id)
 
-def main(rank, model, level, expt_dir):
+def main(rank: int, model: nn.Module, level: int, expt_dir: str) -> None:
+    """Main function for distributed training.
 
+    Args:
+        rank (int): Rank of the current process.
+        model (nn.Module): The model to train.
+        level (int): Current sparsity level.
+        expt_dir (str): Experiment directory to save artifacts/checkpoints/metrics to.
+    """
     config = get_current_config()
     parser = ArgumentParser()
     config.augment_argparse(parser)
@@ -325,7 +394,6 @@ if __name__ == '__main__':
         if level != 0:
             print(f'Pruning Model at level: {level}')
             prune_harness.load_from_ckpt(os.path.join(expt_dir, 'checkpoints', f'model_level_{level-1}.pt'))
-            #_ = compute_perturbation(prune_harness.model, density=thresholds[level]) --> currently only supports CIFAR-like datasets
             prune_harness.level_pruner(density=densities[level])
             prune_harness.model = reset_weights(expt_dir=expt_dir, model=prune_harness.model, training_type=config['experiment_params.training_type']) 
 
@@ -333,8 +401,3 @@ if __name__ == '__main__':
         
         mp.spawn(main, args=(prune_harness.model, level, expt_dir), nprocs=world_size, join=True)
         print(f'Training level {level} complete, moving on to {level+1}')
-        
-
-
-    
-

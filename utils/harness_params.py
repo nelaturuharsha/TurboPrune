@@ -1,7 +1,8 @@
 from fastargs import Param, Section
 from fastargs.validation import And, OneOf
 
-def get_current_params():
+def get_current_params() -> None:
+    """Define the various parameters and their constraints with fastargs."""
     Section('model_params', 'model details').params(
         model_name=Param(str, 'model_choice', default='resnet18', required=True),
         conv_type=Param(And(str, OneOf(['ConvMask'])), required=True))
