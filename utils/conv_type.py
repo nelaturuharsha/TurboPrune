@@ -128,7 +128,7 @@ class Conv1dMask(nn.Conv1d):
         """
         self.mask = torch.zeros_like(self.weight).bernoulli_(p)
 
-
+@param('model_params.conv_type')
 def replace_layers(conv_type: str, model: nn.Module) -> nn.Module:
     """
     Replaces nn.Linear and nn.Conv2d layers in the model with corresponding masked layers.

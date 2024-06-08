@@ -14,7 +14,7 @@ from utils.dataset import CIFARLoader
 
 from fastargs import get_current_config
 from fastargs.decorators import param
-from typing import Any, Dict
+from typing import Any, Dict, Optional, Tuple 
 
 
 def reset_weights(
@@ -111,7 +111,7 @@ def reset_only_masks(expt_dir: str, ckpt_name: str, model: torch.nn.Module) -> N
     model.load_state_dict(model_dict)
 
 
-def compute_sparsity(tensor: torch.Tensor) -> (float, int, int):
+def compute_sparsity(tensor: torch.Tensor) -> Tuple[float, int, int]:
     """Compute the sparsity of a given tensor. Sparsity = number of elements which are 0 in the mask.
 
     Args:
@@ -181,11 +181,11 @@ def gen_expt_dir(
         expt_dir = os.path.join(base_dir, resume_expt_name)
         print(f"Resuming from Level -- {resume_level}")
     elif resume_level == 0 and resume_expt_name is None:
-        print("Creating this Folder :)")
         current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
         unique_id = uuid.uuid4().hex[:6]
         unique_name = f"experiment_{current_time}_{unique_id}"
         expt_dir = os.path.join(base_dir, unique_name)
+        print(f"Creating this Folder {expt_dir}:)")
     else:
         raise AssertionError(
             "Either start from scratch, or provide a path to the checkpoint :)"

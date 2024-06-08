@@ -372,7 +372,7 @@ class Harness:
             )
             sparsity = print_sparsity_info(self.model, verbose=False)
             data_df["level"].append(level)
-            data_df["sparsity"].append(round(sparsity.item(), 4))
+            data_df["sparsity"].append(round(sparsity, 4))
             data_df["final_test_acc"].append(round(te_a, 4))
             data_df["max_test_acc"].append(round(max(sparsity_level_df["test_acc"]), 4))
             summary_path = os.path.join(self.expt_dir, "metrics", "summary.csv")

@@ -6,22 +6,19 @@ dataset:
   num_classes: 10
   batch_size: 256
   num_workers: 16
-  data_root: ./ 
+  data_root: ./
 prune_params:
   prune_rate: 0.2
-  prune_method: mag 
-  er_method: just dont
-  er_init: 0.105
+  prune_method: mag
+  num_levels: 25 
 experiment_params:
-  epochs_per_level: 150 
-  num_levels: 25
-  training_type: wr 
-  expt_setup: other 
+  epochs_per_level: 150
+  training_type: lrr 
+  base_dir: ./ 
 optimizer:
   lr: 0.1
-  scheduler_type: MultiStepLRWarmup 
+  scheduler_type: MultiStepLRWarmup
   warmup_epochs: 10
-  lr_min: 0.01
   weight_decay: 5e-4
 dist_params:
-  port: 12351
+  port: 12350

@@ -167,3 +167,6 @@ checkpoints/
 .DS_Store
 experiment_*
 *.sh
+data/
+cifar10/
+cifar100/

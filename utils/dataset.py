@@ -81,14 +81,14 @@ class CIFARLoader:
         trainset = self.dataset_class(
             root=self.data_root,
             train=True,
-            download=True,
+            download=False,
             transform=self.transform_train,
         )
 
         testset = self.dataset_class(
             root=self.data_root,
             train=False,
-            download=True,
+            download=False,
             transform=self.transform_test,
         )
 

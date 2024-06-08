@@ -10,14 +10,15 @@ import torch.nn as nn
 import torchvision.models as models
 
 ## file-based imports
-from utils.conv_type import ConvMask, Conv1dMask
+from utils.conv_type import ConvMask, Conv1dMask, replace_layers
 from utils.harness_params import get_current_params
 from utils.dataset import CIFARLoader
-from utils.custom_models import PreActResNet, PreActBlock, replace_layers
+from utils.custom_models import PreActResNet, PreActBlock
 
 ## fastargs
 from fastargs import get_current_config
 from fastargs.decorators import param
+from typing import Optional, Dict, Any
 
 ## ffcv
 from ffcv.loader import Loader, OrderOption
