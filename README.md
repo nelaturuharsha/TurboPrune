@@ -1,10 +1,8 @@
 ## TurboPrune: High-Speed Distributed Lottery Ticket Training
+<p align="center">
+  <img src="https://github.com/nelaturuharsha/TurboPrune/assets/22708963/51fb49f5-8ab5-4386-a4f2-57feec88c1dd" alt="circular_image_centered" width="400">
+</p>
 
-
-
-In this repository, we implement a training harness which enables finding lottery tickets in deep CNNs on ImageNet and CIFAR datasets. The hope is this is able to make pruning research easier/faster!
-
-### Key Features
 - PyTorch Distributed Data Parallel (DDP) based training harness for training the network (post-pruning) as fast as possible.
 - [FFCV](https://github.com/libffcv/ffcv) integration for super-fast training on ImageNet (1:09 mins/epoch on 4xA100 GPUs with ResNet18).
 - Support for most (if not all) torchvision models. (Transformers will be added later).
@@ -12,7 +10,7 @@ In this repository, we implement a training harness which enables finding lotter
 - Simple harness, with fastargs -- easily extensible.
 - Logging to CSV (nothing fancy, but you can integrate wandb/comet/your own system easily).
 - End to End pipeline easily configurarable using [fastargs](https://github.com/GuillaumeLeclerc/fastargs).
-- GPU speed + time comparisons to comparison (TODO -- once I have enough time to format everything).
+- Detailed timing comparisons, training speed scaling - will come once I have had a chance to collate all the results :)
 
 ### Datasets Supported
 1. CIFAR10
