@@ -2,23 +2,23 @@ model_params:
   conv_type: ConvMask
   model_name: resnet18 
 dataset:
-  dataset_name: CIFAR100 
-  num_classes: 100
+  dataset_name: CIFAR10 
+  num_classes: 10
   batch_size: 256
   num_workers: 16
-  data_root: ./ 
+  data_root: ./
 prune_params:
   prune_rate: 0.2
-  prune_method: mag 
-  num_levels: 25
+  prune_method: mag
+  num_levels: 25 
 experiment_params:
   epochs_per_level: 150 
-  training_type: wr 
-  expt_setup: other 
+  training_type: lrr
+  base_dir: ./ 
 optimizer:
   lr: 0.1
   scheduler_type: MultiStepLRWarmup
   warmup_epochs: 10
   weight_decay: 5e-4
 dist_params:
-  port: 12352
+  port: 12350

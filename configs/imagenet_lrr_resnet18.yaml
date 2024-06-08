@@ -1,6 +1,6 @@
 model_params:
   conv_type: ConvMask
-  model_name: resnet18 
+  model_name: resnet18
 dataset:
   dataset_name: ImageNet
   num_classes: 1000
@@ -10,12 +10,10 @@ dataset:
 prune_params:
   prune_rate: 0.2
   prune_method: mag 
-  er_method: just dont
-  er_init: 0.105
+  num_levels: 25
 experiment_params:
   epochs_per_level: 90
-  num_levels: 25
-  training_type: lrr
+  training_type: lrr 
   expt_setup: other 
 optimizer:
   lr: 0.1
@@ -23,4 +21,4 @@ optimizer:
   warmup_epochs: 10
   lr_min: 0.01
 dist_params:
-  port: 12354
+  port: 12355

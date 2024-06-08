@@ -10,11 +10,9 @@ dataset:
 prune_params:
   prune_rate: 0.2
   prune_method: mag 
-  er_method: just dont
-  er_init: 0.105
+  num_levels: 25
 experiment_params:
   epochs_per_level: 150 
-  num_levels: 25
   training_type: lrr
   expt_setup: other 
 optimizer:
