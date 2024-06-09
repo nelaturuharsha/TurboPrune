@@ -12,9 +12,10 @@ prune_params:
   prune_method: mag 
   num_levels: 25
 experiment_params:
+  seed: 0
   epochs_per_level: 90
   training_type: lrr 
-  expt_setup: other 
+  base_dir: ./ 
 optimizer:
   lr: 0.1
   scheduler_type: ImageNetLRDropsWarmup
