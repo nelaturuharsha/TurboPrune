@@ -10,10 +10,17 @@
 - Simple harness, with fastargs -- easily extensible.
 - Logging to CSV (nothing fancy, but you can integrate wandb/comet/your own system easily).
 - End to End pipeline easily configurarable using [fastargs](https://github.com/GuillaumeLeclerc/fastargs).
-- Detailed timing comparisons, training speed scaling - will come once I have had a chance to collate all the results :)
 
 ### Timing Comparison
-**Coming soon!**
+
+The numbers below were obtained on a cluster with similar computational configuration -- only variation was the dataloading method, AMP (enabled where specified) and the GPU model used was NVIDIA A100 (40GB).
+
+The model used was ResNet50 and the effective batch size in each
+
+<p align="center">
+  <img src="https://github.com/nelaturuharsha/TurboPrune/assets/22708963/f57bf823-e8b7-46dc-a1f6-a88d91b3e75e" alt="circular_image_centered" width="800">
+</p>
+
 
 ### Datasets Supported
 1. CIFAR10
