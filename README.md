@@ -15,7 +15,7 @@
 
 The numbers below were obtained on a cluster with similar computational configuration -- only variation was the dataloading method, AMP (enabled where specified) and the GPU model used was NVIDIA A100 (40GB).
 
-The model used was ResNet50 and the effective batch size in each
+The model used was ResNet50 and the effective batch size in each case was 512.
 
 <p align="center">
   <img src="https://github.com/nelaturuharsha/TurboPrune/assets/22708963/f57bf823-e8b7-46dc-a1f6-a88d91b3e75e" alt="circular_image_centered" width="800">
