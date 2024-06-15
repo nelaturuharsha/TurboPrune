@@ -1,5 +1,5 @@
-# TurboPrune: High-Speed Distributed Lottery Ticket Training
-Pruning harness with DDP+FFCV+AMP.
+## TurboPrune: High-Speed Distributed Lottery Ticket Training
+
 <p align="center">
   <img src="https://github.com/nelaturuharsha/TurboPrune/assets/22708963/51fb49f5-8ab5-4386-a4f2-57feec88c1dd" alt="circular_image_centered" width="400">
 </p>
