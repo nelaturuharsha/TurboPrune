@@ -170,3 +170,10 @@ experiment_*
 data/
 cifar10/
 cifar100/
+CIFAR100/
+ImageNet/
+*.yaml
+*.pt
+Thesis/
+dump_ckpt.py
+test_ckpt.py

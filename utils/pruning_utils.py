@@ -8,30 +8,20 @@ import torch.nn as nn
 
 ## torchvision
 import torchvision.models as models
+from torch.amp import autocast
 
 ## file-based imports
 from utils.conv_type import ConvMask, Conv1dMask, replace_layers
 from utils.harness_params import get_current_params
-from utils.dataset import CIFARLoader
 from utils.custom_models import PreActResNet, PreActBlock
+from utils.dataset import imagenet
 
 ## fastargs
 from fastargs import get_current_config
 from fastargs.decorators import param
 from typing import Optional, Dict, Any
 
-## ffcv
-from ffcv.loader import Loader, OrderOption
-from ffcv.transforms import (
-    ToTensor,
-    ToDevice,
-    Squeeze,
-    NormalizeImage,
-    RandomHorizontalFlip,
-    ToTorchImage,
-)
-from ffcv.fields.decoders import RandomResizedCropRGBImageDecoder
-from ffcv.fields.basics import IntDecoder
+import airbench
 
 get_current_params()
 
@@ -72,62 +62,17 @@ class PruningStuff:
         self.this_device = "cuda:0"
         self.config = get_current_config()
 
-        self.train_loader = self.create_train_loader()
+        if self.config['dataset.dataset_name'] == 'ImageNet':
+            self.loaders = imagenet(distributed=False, this_device='cuda:0')
+            self.train_loader = self.loaders.train_loader
+        elif 'CIFAR' in self.config['dataset.dataset_name']:
+            self.train_loader = airbench.CifarLoader(path='./cifar10', batch_size=512, train=True, aug={'flip' : True, 'translate' : 2}, altflip=True)
+        
         if model is None:
             self.model = self.acquire_model()
         else:
             self.model = model
         self.criterion = nn.CrossEntropyLoss()
-
-    @param("dataset.batch_size")
-    @param("dataset.num_workers")
-    @param("dataset.data_root")
-    @param("dataset.dataset_name")
-    def create_train_loader(
-        self, batch_size: int, num_workers: int, data_root: str, dataset_name: str
-    ) -> Any:
-        """Create an instance of the train dataloader if required by a pruning criterion.
-
-        Args:
-            batch_size (int): Batch size
-            num_workers (int): Number of workers
-            data_root (str): Root directory for data
-            dataset_name (str): Name of the dataset
-
-        Returns:
-            Any: The train dataloader.
-        """
-        if "CIFAR" not in dataset_name:
-            train_image_pipeline = [
-                RandomResizedCropRGBImageDecoder((224, 224)),
-                RandomHorizontalFlip(),
-                ToTensor(),
-                ToDevice(torch.device("cuda:0"), non_blocking=True),
-                ToTorchImage(),
-                NormalizeImage(IMAGENET_MEAN, IMAGENET_STD, np.float32),
-            ]
-
-            label_pipeline = [
-                IntDecoder(),
-                ToTensor(),
-                Squeeze(),
-                ToDevice(torch.device("cuda:0"), non_blocking=True),
-            ]
-
-            train_loader = Loader(
-                os.path.join(data_root, "train_500_0.50_90.beton"),
-                batch_size=batch_size,
-                num_workers=num_workers,
-                order=OrderOption.RANDOM,
-                os_cache=True,
-                drop_last=True,
-                pipelines={"image": train_image_pipeline, "label": label_pipeline},
-            )
-        else:
-            loader = CIFARLoader(distributed=False)
-            train_loader = loader.train_loader
-
-        return train_loader
 
     @param("model_params.model_name")
     @param("dataset.num_classes")
@@ -168,34 +113,50 @@ class PruningStuff:
             )
 
         replace_layers(model=model)
+        #if 'resnet18' in model_name:
+        #    model.load_state_dict(torch.load(os.path.join(self.config['experiment_params.base_dir'], 'base_resnet18_ckpt.pt')))
+        if ('resnet50' in model_name) and ('ImageNet' in dataset_name):
+            model.load_state_dict(torch.load(os.path.join(self.config['experiment_params.base_dir'], 'imagenet_resnet50_ckpt.pt'))) 
+        elif ('resnet50' in model_name) and ('CIFAR100' in dataset_name):
+            model.load_state_dict(torch.load(os.path.join(self.config['experiment_params.base_dir'], 'cifar100_resnet50_ckpt.pt')))
+
+
         model.to(self.this_device)
-        if self.config["prune_params.er_method"] != "just dont":
-            model = self.prune_at_initialization(model=model)
         return model
 
     @param("prune_params.er_method")
     @param("prune_params.er_init")
     def prune_at_initialization(
-        self, er_method: str, er_init: float, model: nn.Module
-    ) -> nn.Module:
+        self, er_method: str, er_init: float) -> nn.Module:
         """Prune the model at initialization.
 
         Args:
             er_method (str): Method of pruning.
             er_init (float): Initial sparsity target.
-            model (nn.Module): The model to prune.
 
         Returns:
             nn.Module: The pruned model.
         """
+        self.model = self.acquire_model()
+        total = 0
+        nonzero = 0
+        for n, m in self.model.named_modules():
+            if isinstance(m, (Conv1dMask, ConvMask)):
+                total += m.mask.numel()
+                nonzero += m.mask.sum()
+        
+        print(f'density is {(total / nonzero) * 100:3f}')
+                
+        print('prior to pruning at init')
         er_method_name = f"prune_{er_method}"
         pruner_method = globals().get(er_method_name)
         if er_method in {"synflow", "snip"}:
-            model = pruner_method(model, self.train_loader, er_init)
+            self.model = pruner_method(self.model, self.train_loader, er_init)
         else:
-            pruner_method(model, er_init)
+            pruner_method(self.model, er_init)
 
-        return model
+        print('We just pruned at init, woohoo!')
+
 
     @param("prune_params.prune_method")
     def level_pruner(self, prune_method: str, density: float) -> None:
@@ -240,6 +201,8 @@ def prune_mag(model: nn.Module, density: float) -> nn.Module:
         nn.Module: The pruned model.
     """
     score_list = {}
+
+
     for n, m in model.named_modules():
         if isinstance(m, (ConvMask, Conv1dMask)):
             score_list[n] = (m.mask.to(m.weight.device) * m.weight).detach().abs_()
@@ -251,6 +214,7 @@ def prune_mag(model: nn.Module, density: float) -> nn.Module:
     if not k < 1:
         total_num = 0
         total_den = 0
+
         for n, m in model.named_modules():
             if isinstance(m, (ConvMask, Conv1dMask)):
                 score = score_list[n].to(m.weight.device)
@@ -346,9 +310,10 @@ def prune_snip(model: nn.Module, trainloader: Any, density: float) -> nn.Module:
     for i, (images, target) in enumerate(trainloader):
         images = images.to(torch.device("cuda"))
         target = target.to(torch.device("cuda")).long()
-        model.zero_grad()
-        output = model(images)
-        criterion(output, target).backward()
+        with autocast(dtype=torch.bfloat16, device_type='cuda'):
+            model.zero_grad()
+            output = model(images)
+            criterion(output, target).backward()
         break
 
     score_list = {}
@@ -427,8 +392,9 @@ def prune_synflow(model: nn.Module, trainloader: Any, density: float) -> nn.Modu
         target = target.to(torch.device("cuda")).long()
         input_dim = list(images[0, :].shape)
         input = torch.ones([1] + input_dim).to("cuda")
-        output = model(input)
-        torch.sum(output).backward()
+        with autocast(dtype=torch.bfloat16, device_type='cuda'):
+            output = model(input)
+            torch.sum(output).backward()
         break
 
     score_list = {}

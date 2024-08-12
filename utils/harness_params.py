@@ -18,13 +18,13 @@ def get_current_params() -> None:
         num_classes=Param(
             And(int, OneOf([10, 100, 1000])), "number of classes", required=True
         ),
-        batch_size=Param(int, "batch size", default=256),
+        batch_size=Param(int, "batch size", default=512),
         num_workers=Param(int, "num_workers", default=8),
         data_root=Param(str, "path to betons", required=True),
     )
 
     Section("prune_params", "pruning configuration").params(
-        prune_rate=Param(float, "percentage of parameters to remove", required=True),
+        prune_rate=Param(float, "percentage of parameters to remove", default=0.2),
         er_init=Param(float, "sparse init percentage/target", default=0.2),
         er_method=Param(
             And(str, OneOf(["er_erk", "er_balanced", "synflow", "snip", "just dont"])),
@@ -32,9 +32,9 @@ def get_current_params() -> None:
         ),
         prune_method=Param(
             And(
-                str, OneOf(["random_erk", "random_balanced", "synflow", "snip", "mag"])
+                str, OneOf(["random_erk", "random_balanced", "synflow", "snip", "mag", "just dont"])
             ),
-            required=True,
+            default='mag',
         ),
         num_levels=Param(int, "number of pruning levels", required=True),
     )
@@ -48,13 +48,15 @@ def get_current_params() -> None:
             int, "level to resume from -- 0 if starting afresh", default=0
         ),
         resume_expt_name=Param(str, "resume path"),
+        num_cycles=Param(int, "number of cyclic repetition of the LR schedule in one cycle", default=1)
     )
 
     Section("optimizer", "data related stuff").params(
         lr=Param(float, "learning rate", required=True),
         momentum=Param(float, "momentum", default=0.9),
         weight_decay=Param(float, "weight decay", default=1e-4),
-        warmup_epochs=Param(int, "warmup length", default=10),
+        warmup_steps=Param(int, "warmup length", default=10),
+        cooldown_steps=Param(int, 'cooldown steps', default=10),
         scheduler_type=Param(
             And(
                 str,
@@ -62,8 +64,11 @@ def get_current_params() -> None:
                     [
                         "MultiStepLRWarmup",
                         "ImageNetLRDropsWarmup",
-                        "CosineLRWarmup",
+                        #"CosineLRWarmup",
                         "TriangularSchedule",
+                        "ScheduleFree",
+                        "TrapezoidalSchedule",
+                        "OneCycleLR"
                     ]
                 ),
             ),

@@ -39,7 +39,7 @@ def reset_weights(
             os.path.join(expt_dir, "checkpoints", "model_rewind.pt")
         )
     else:
-        print("probably LRR, aint nothing to do")
+        print("probably LRR, aint nothing to do -- or if PaI, we aren't touching it any case.")
         return model
 
     original_weights = dict(
@@ -140,7 +140,7 @@ def print_sparsity_info(model: torch.nn.Module, verbose: bool = True) -> float:
     my_table.field_names = ["Layer Name", "Layer Sparsity", "Density", "Non-zero/Total"]
     total_params = 0
     total_params_kept = 0
-
+    
     for name, layer in model.named_modules():
         if isinstance(layer, (ConvMask, Conv1dMask)):
             weight_mask = layer.mask
@@ -240,6 +240,7 @@ def generate_densities(
     Returns:
         list[float]: List of densities for each level.
     """
+    
     densities = [(1 - prune_rate) ** i for i in range(num_levels)]
     return densities
 

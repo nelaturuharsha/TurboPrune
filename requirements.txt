@@ -5,3 +5,6 @@ pyyaml
 tqdm
 torch
 torchvision
+airbench
+schedulefree
+pyhessian
