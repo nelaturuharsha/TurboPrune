@@ -75,21 +75,26 @@ class PruningStuff:
         self.criterion = nn.CrossEntropyLoss()
 
     @param("model_params.model_name")
-    @param("dataset.num_classes")
     @param("dataset.dataset_name")
     def acquire_model(
-        self, model_name: str, num_classes: int, dataset_name: str
+        self, model_name: str, dataset_name: str
     ) -> nn.Module:
         """Acquire the model based on the provided parameters.
 
         Args:
             model_name (str): Name of the model.
-            num_classes (int): Number of output classes.
             dataset_name (str): Name of the dataset.
 
         Returns:
             nn.Module: The acquired model.
         """
+        if dataset_name == 'CIFAR10':
+            num_classes = 10
+        elif dataset_name == 'CIFAR100':
+            num_classes = 100
+        elif dataset_name == 'ImageNet':
+            num_classes = 1000
+        
         if model_name == "preresnet":
             model = PreActResNet(block=PreActBlock, num_blocks=[2, 2, 2, 2])
         else:

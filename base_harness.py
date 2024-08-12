@@ -1,17 +1,15 @@
 ## pythonic imports
 import os
-import random
 import numpy as np
 import pandas as pd
 from argparse import ArgumentParser
 from prettytable import PrettyTable
 import tqdm
-from copy import deepcopy
+from typing import Tuple
 
 ## torch
 import torch
 import torch.nn as nn
-from torch.distributed import init_process_group
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch import optim
@@ -19,37 +17,15 @@ import torch.multiprocessing as mp
 from torch.cuda.amp import autocast
 
 ## torchvision
-import torchvision
-
 ## file-based imports
 import utils.schedulers as schedulers
 import utils.pruning_utils as pruning_utils
 from utils.harness_utils import *
-from utils.dataset import CIFARLoader
+from utils.dataset import CIFARLoader, imagenet
 
 ## fastargs
 from fastargs import get_current_config
 from fastargs.decorators import param
-
-##ffcv
-from ffcv.loader import Loader, OrderOption
-from ffcv.transforms import (
-    ToTensor,
-    ToDevice,
-    Squeeze,
-    NormalizeImage,
-    RandomHorizontalFlip,
-    ToTorchImage,
-)
-from ffcv.fields.decoders import (
-    RandomResizedCropRGBImageDecoder,
-    CenterCropRGBImageDecoder,
-)
-from ffcv.fields.basics import IntDecoder
-
-IMAGENET_MEAN = np.array([0.485, 0.456, 0.406]) * 255
-IMAGENET_STD = np.array([0.229, 0.224, 0.225]) * 255
-DEFAULT_CROP_RATIO = 224 / 256
 
 
 class Harness:
@@ -68,114 +44,28 @@ class Harness:
         self.criterion = nn.CrossEntropyLoss()
 
         if "CIFAR" not in self.config["dataset.dataset_name"]:
-            self.train_loader = self.create_train_loader()
-            self.test_loader = self.create_test_loader()
+            self.loaders = imagenet(this_device=self.this_device, distributed=True)
         else:
             self.loaders = CIFARLoader(distributed=True)
-            self.train_loader = self.loaders.train_loader
-            self.test_loader = self.loaders.test_loader
+
+        self.train_loader = self.loaders.train_loader
+        self.test_loader = self.loaders.test_loader
 
         model = model.to(self.this_device)
         self.model = DDP(model, device_ids=[self.gpu_id])
         self.create_optimizers()
         self.expt_dir = expt_dir
 
-    @param("dataset.batch_size")
-    @param("dataset.num_workers")
-    @param("dataset.data_root")
-    def create_train_loader(
-        self,
-        batch_size: int,
-        num_workers: int,
-        data_root: str,
-        distributed: bool = True,
-    ) -> Any:
-        """Create the train dataloader.
+        self.precision, self.use_amp = self.get_dtype_amp()
 
-        Args:
-            batch_size (int): Batch size for data loading.
-            num_workers (int): Number of workers for data loading.
-            data_root (str): Root directory for data.
-            distributed (bool, optional): Whether to use distributed data loading. Default is True.
-
-        Returns:
-            Any: Train dataloader.
-        """
-        train_image_pipeline = [
-            RandomResizedCropRGBImageDecoder((224, 224)),
-            RandomHorizontalFlip(),
-            ToTensor(),
-            ToDevice(torch.device(self.this_device), non_blocking=True),
-            ToTorchImage(),
-            NormalizeImage(IMAGENET_MEAN, IMAGENET_STD, np.float32),
-        ]
-
-        label_pipeline = [
-            IntDecoder(),
-            ToTensor(),
-            Squeeze(),
-            ToDevice(torch.device(self.this_device), non_blocking=True),
-        ]
-
-        train_loader = Loader(
-            os.path.join(data_root, "train_500_0.50_90.beton"),
-            batch_size=batch_size,
-            num_workers=num_workers,
-            order=OrderOption.RANDOM,
-            os_cache=True,
-            drop_last=True,
-            pipelines={"image": train_image_pipeline, "label": label_pipeline},
-            distributed=distributed,
-        )
-
-        return train_loader
-
-    @param("dataset.batch_size")
-    @param("dataset.num_workers")
-    @param("dataset.data_root")
-    def create_test_loader(
-        self,
-        batch_size: int,
-        num_workers: int,
-        data_root: str,
-        distributed: bool = True,
-    ) -> Any:
-        """Create the test dataloader.
-
-        Args:
-            batch_size (int): Batch size for data loading.
-            num_workers (int): Number of workers for data loading.
-            data_root (str): Root directory for data.
-            distributed (bool, optional): Whether to use distributed data loading. Default is True.
-
-        Returns:
-            Any: Test dataloader.
-        """
-        val_image_pipeline = [
-            CenterCropRGBImageDecoder((256, 256), ratio=DEFAULT_CROP_RATIO),
-            ToTensor(),
-            ToDevice(torch.device(self.this_device), non_blocking=True),
-            ToTorchImage(),
-            NormalizeImage(IMAGENET_MEAN, IMAGENET_STD, np.float32),
-        ]
-
-        label_pipeline = [
-            IntDecoder(),
-            ToTensor(),
-            Squeeze(),
-            ToDevice(torch.device(self.this_device), non_blocking=True),
-        ]
-
-        val_loader = Loader(
-            os.path.join(data_root, "val_500_0.50_90.beton"),
-            batch_size=batch_size,
-            num_workers=num_workers,
-            order=OrderOption.SEQUENTIAL,
-            drop_last=False,
-            pipelines={"image": val_image_pipeline, "label": label_pipeline},
-            distributed=distributed,
-        )
-        return val_loader
+    @param('experiment_params.training_precision')
+    def get_dtype_amp(self, training_precision):
+        dtype_map = {
+            'bfloat16': (torch.bfloat16, True),
+            'float16': (torch.float16, True),
+            'float32': (torch.float32, False)
+        }
+        return dtype_map.get(training_precision, (torch.float32, False))
 
     @param("optimizer.lr")
     @param("optimizer.momentum")
@@ -203,7 +93,7 @@ class Harness:
         else:
             self.scheduler = scheduler(optimizer=self.optimizer)
 
-    def train_one_epoch(self, epoch: int) -> (float, float):
+    def train_one_epoch(self, epoch: int) -> Tuple[float, float]:
         """Train the model for one epoch.
 
         Args:
@@ -227,7 +117,9 @@ class Harness:
                 )
 
             self.optimizer.zero_grad()
-            #with autocast(dtype=torch.bfloat16):
+            with autocast(dtype=self.precision, enabled = self.use_amp):
+                outputs = model(inputs.contiguous())
+                loss = self.criterion(outputs, targets)
             outputs = model(inputs)
             loss = self.criterion(outputs, targets)
             loss.backward()
@@ -247,7 +139,7 @@ class Harness:
         accuracy = 100.0 * (correct / total)
         return train_loss, accuracy
 
-    def test(self) -> (float, float):
+    def test(self) -> Tuple[float, float]:
         """Evaluate the model on the test set.
 
         Returns:
@@ -266,9 +158,9 @@ class Harness:
                     inputs, targets = inputs.to(self.this_device), targets.to(
                         self.this_device
                     )
-                #with autocast(dtype=torch.bfloat16):
-                outputs = model(inputs)
-                loss = self.criterion(outputs, targets)
+                with autocast(dtype=self.precision, enabled = self.use_amp):
+                    outputs = model(inputs.contiguous())
+                    loss = self.criterion(outputs, targets)
 
                 test_loss += loss.item()
                 _, predicted = outputs.max(1)
@@ -318,35 +210,16 @@ class Harness:
             train_loss, train_acc = self.train_one_epoch(epoch)
             test_loss, test_acc = self.test()
 
-            train_loss_tensor = torch.tensor(train_loss).to(self.model.device)
-            train_acc_tensor = torch.tensor(train_acc).to(self.model.device)
-            test_loss_tensor = torch.tensor(test_loss).to(self.model.device)
-            test_acc_tensor = torch.tensor(test_acc).to(self.model.device)
+            metrics = [torch.tensor(val).to(self.model.device) for val in [train_loss, train_acc, test_loss, test_acc]]
 
-            dist.all_reduce(train_loss_tensor, op=dist.ReduceOp.SUM)
-            dist.all_reduce(train_acc_tensor, op=dist.ReduceOp.SUM)
-            dist.all_reduce(test_loss_tensor, op=dist.ReduceOp.SUM)
-            dist.all_reduce(test_acc_tensor, op=dist.ReduceOp.SUM)
-
-            train_loss_tensor /= dist.get_world_size()
-            train_acc_tensor /= dist.get_world_size()
-            test_loss_tensor /= dist.get_world_size()
-            test_acc_tensor /= dist.get_world_size()
+            for metric in metrics:
+                dist.reduce(metric, dst=0, op=dist.ReduceOp.AVG)
 
             if self.gpu_id == 0:
-                tr_l, te_l, tr_a, te_a = (
-                    train_loss_tensor.item(),
-                    test_loss_tensor.item(),
-                    train_acc_tensor.item(),
-                    test_acc_tensor.item(),
-                )
+                tr_l, tr_a, te_l, te_a = [metric.item() for metric in metrics]
                 new_table.add_row([epoch, tr_l, te_l, tr_a, te_a])
                 print(new_table)
-                sparsity_level_df["epoch"].append(epoch)
-                sparsity_level_df["train_loss"].append(tr_l)
-                sparsity_level_df["test_loss"].append(te_l)
-                sparsity_level_df["train_acc"].append(tr_a)
-                sparsity_level_df["test_acc"].append(te_a)
+                sparsity_level_df.update({"epoch": epoch, "train_loss": tr_l, "test_loss": te_l, "train_acc": tr_a, "test_acc": te_a})
 
                 save_matching = (
                     (level == 0) and (training_type == "wr") and (epoch == 9)

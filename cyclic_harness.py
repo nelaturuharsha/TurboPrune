@@ -6,54 +6,28 @@ import pandas as pd
 from argparse import ArgumentParser
 from prettytable import PrettyTable
 import tqdm
-from copy import deepcopy
 
 ## torch
 import torch
 import torch.nn as nn
-from torch.distributed import init_process_group
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch import optim
 import torch.multiprocessing as mp
 from torch.cuda.amp import autocast
 
-## torchvision
-import torchvision
-
 ## file-based imports
 import utils.schedulers as schedulers
 import utils.pruning_utils as pruning_utils
 from utils.harness_utils import *
-from utils.dataset import CIFARLoader
 
 ## fastargs
 from fastargs import get_current_config
 from fastargs.decorators import param
 
-##ffcv
-from ffcv.loader import Loader, OrderOption
-from ffcv.transforms import (
-    ToTensor,
-    ToDevice,
-    Squeeze,
-    NormalizeImage,
-    RandomHorizontalFlip,
-    ToTorchImage,
-)
-from ffcv.fields.decoders import (
-    RandomResizedCropRGBImageDecoder,
-    CenterCropRGBImageDecoder,
-)
-from ffcv.fields.basics import IntDecoder
-
-IMAGENET_MEAN = np.array([0.485, 0.456, 0.406]) * 255
-IMAGENET_STD = np.array([0.229, 0.224, 0.225]) * 255
-DEFAULT_CROP_RATIO = 224 / 256
-
 from typing import Tuple
 
-import airbench
+from utils.dataset import CIFARLoader, imagenet
 
 class Harness:
     """Harness class to handle training and evaluation.
@@ -71,117 +45,29 @@ class Harness:
         self.criterion = nn.CrossEntropyLoss()
 
         if "CIFAR" not in self.config["dataset.dataset_name"]:
-            self.train_loader = self.create_train_loader()
-            self.test_loader = self.create_test_loader()
+            self.loaders = imagenet(this_device=self.this_device, distributed=True)
+            self.train_loader = self.loaders.train_loader
+            self.test_loader = self.loaders.test_loader
         else:
             self.loaders = CIFARLoader(distributed=True)
             self.train_loader = self.loaders.train_loader
-            self.test_loader = self.loaders.test_loader
-
-        self.global_epoch = 0
-            
+            self.test_loader = self.loaders.test_loader            
 
         model = model.to(self.this_device)
         self.model = DDP(model, device_ids=[self.gpu_id])
         self.create_optimizers()
         self.expt_dir = expt_dir
 
-    @param("dataset.batch_size")
-    @param("dataset.num_workers")
-    @param("dataset.data_root")
-    def create_train_loader(
-        self,
-        batch_size: int,
-        num_workers: int,
-        data_root: str,
-        distributed: bool = True,
-    ) -> Any:
-        """Create the train dataloader.
-
-        Args:
-            batch_size (int): Batch size for data loading.
-            num_workers (int): Number of workers for data loading.
-            data_root (str): Root directory for data.
-            distributed (bool, optional): Whether to use distributed data loading. Default is True.
-
-        Returns:
-            Any: Train dataloader.
-        """
-        train_image_pipeline = [
-            RandomResizedCropRGBImageDecoder((224, 224)),
-            RandomHorizontalFlip(),
-            ToTensor(),
-            ToDevice(torch.device(self.this_device), non_blocking=True),
-            ToTorchImage(),
-            NormalizeImage(IMAGENET_MEAN, IMAGENET_STD, np.float32),
-        ]
-
-        label_pipeline = [
-            IntDecoder(),
-            ToTensor(),
-            Squeeze(),
-            ToDevice(torch.device(self.this_device), non_blocking=True),
-        ]
-
-        train_loader = Loader(
-            os.path.join(data_root, "train_500_0.50_90.beton"),
-            batch_size=batch_size,
-            num_workers=num_workers,
-            order=OrderOption.RANDOM,
-            os_cache=True,
-            drop_last=True,
-            pipelines={"image": train_image_pipeline, "label": label_pipeline},
-            distributed=distributed,
-        )
-
-        return train_loader
-
-    @param("dataset.batch_size")
-    @param("dataset.num_workers")
-    @param("dataset.data_root")
-    def create_test_loader(
-        self,
-        batch_size: int,
-        num_workers: int,
-        data_root: str,
-        distributed: bool = True,
-    ) -> Any:
-        """Create the test dataloader.
-
-        Args:
-            batch_size (int): Batch size for data loading.
-            num_workers (int): Number of workers for data loading.
-            data_root (str): Root directory for data.
-            distributed (bool, optional): Whether to use distributed data loading. Default is True.
-
-        Returns:
-            Any: Test dataloader.
-        """
-        val_image_pipeline = [
-            CenterCropRGBImageDecoder((256, 256), ratio=DEFAULT_CROP_RATIO),
-            ToTensor(),
-            ToDevice(torch.device(self.this_device), non_blocking=True),
-            ToTorchImage(),
-            NormalizeImage(IMAGENET_MEAN, IMAGENET_STD, np.float32),
-        ]
-
-        label_pipeline = [
-            IntDecoder(),
-            ToTensor(),
-            Squeeze(),
-            ToDevice(torch.device(self.this_device), non_blocking=True),
-        ]
-
-        val_loader = Loader(
-            os.path.join(data_root, "val_500_0.50_90.beton"),
-            batch_size=batch_size,
-            num_workers=num_workers,
-            order=OrderOption.SEQUENTIAL,
-            drop_last=False,
-            pipelines={"image": val_image_pipeline, "label": label_pipeline},
-            distributed=distributed,
-        )
-        return val_loader
+        self.precision, self.use_amp = self.get_dtype_amp()
+    
+    @param('experiment_params.training_precision')
+    def get_dtype_amp(self, training_precision):
+        dtype_map = {
+            'bfloat16': (torch.bfloat16, True),
+            'float16': (torch.float16, True),
+            'float32': (torch.float32, False)
+        }
+        return dtype_map.get(training_precision, (torch.float32, False))
 
     @param("optimizer.lr")
     @param("optimizer.momentum")
@@ -218,6 +104,7 @@ class Harness:
         Returns:
             (float, float): Training loss and accuracy.
         """
+
         if "CIFAR" in self.config["dataset.dataset_name"]:
             self.loaders.train_sampler.set_epoch(epoch)
         model = self.model
@@ -234,9 +121,10 @@ class Harness:
                 )
 
             self.optimizer.zero_grad()
-            #with autocast(dtype=torch.bfloat16):
-            outputs = model(inputs.contiguous())
-            loss = self.criterion(outputs, targets)
+            
+            with autocast(dtype=self.precision, enabled = self.use_amp):
+                outputs = model(inputs.contiguous())
+                loss = self.criterion(outputs, targets)
             loss.backward()
             self.optimizer.step()
 
@@ -244,12 +132,7 @@ class Harness:
             _, predicted = outputs.max(1)
             total += targets.size(0)
             correct += predicted.eq(targets).sum().item()
-
-            if self.config["optimizer.scheduler_type"] == "TriangularSchedule":
-                self.scheduler.step()
-
-        if self.config["optimizer.scheduler_type"] != "TriangularSchedule":
-            self.scheduler.step()
+        self.scheduler.step()
         train_loss /= len(self.train_loader)
         accuracy = 100.0 * (correct / total)
         return train_loss, accuracy
@@ -273,9 +156,9 @@ class Harness:
                     inputs, targets = inputs.to(self.this_device), targets.to(
                         self.this_device
                     )
-                #with autocast(dtype=torch.bfloat16):
-                outputs = model(inputs.contiguous())
-                loss = self.criterion(outputs, targets)
+                with autocast(dtype=self.precision, enabled = self.use_amp):
+                    outputs = model(inputs.contiguous())
+                    loss = self.criterion(outputs, targets)
 
                 test_loss += loss.item()
                 _, predicted = outputs.max(1)
@@ -289,9 +172,8 @@ class Harness:
 
     @param("experiment_params.epochs_per_level")
     @param("experiment_params.training_type")
-    @param("experiment_params.num_cycles")
     def train_one_level(
-        self, epochs_per_level: int, training_type: str, num_cycles: int, level: int) -> None:
+        self, epochs_per_level: int, training_type: str, level: int) -> None:
         """Train the model for one full level. This can thought of as one full training run.
 
         Args:
@@ -321,38 +203,20 @@ class Harness:
             "final_test_acc": [],
         }
 
-        #for cycle in range(num_cycles):
-            #self.create_optimizers()
         for epoch in range(epochs_per_level):
             train_loss, train_acc = self.train_one_epoch(epoch)
             test_loss, test_acc = self.test()
 
-            train_loss_tensor = torch.tensor(train_loss).to(self.model.device)
-            train_acc_tensor = torch.tensor(train_acc).to(self.model.device)
-            test_loss_tensor = torch.tensor(test_loss).to(self.model.device)
-            test_acc_tensor = torch.tensor(test_acc).to(self.model.device)
-
-            dist.all_reduce(train_loss_tensor, op=dist.ReduceOp.AVG)
-            dist.all_reduce(train_acc_tensor, op=dist.ReduceOp.AVG)
-            dist.all_reduce(test_loss_tensor, op=dist.ReduceOp.AVG)
-            dist.all_reduce(test_acc_tensor, op=dist.ReduceOp.AVG)
-
+            metrics = [torch.tensor(val).to(self.model.device) for val in [train_loss, train_acc, test_loss, test_acc]]
+            
+            for metric in metrics:
+                dist.reduce(metric, dst=0, op=dist.ReduceOp.AVG)
 
             if self.gpu_id == 0:
-                tr_l, te_l, tr_a, te_a = (
-                    train_loss_tensor.item(),
-                    test_loss_tensor.item(),
-                    train_acc_tensor.item(),
-                    test_acc_tensor.item(),
-                )
-                #new_table.add_row([f"cycle-{cycle+1}-{self.global_epoch}", tr_l, te_l, tr_a, te_a])
+                tr_l, tr_a, te_l, te_a = [metric.item() for metric in metrics]
                 new_table.add_row([epoch, tr_l, te_l, tr_a, te_a])
                 print(new_table)
-                sparsity_level_df["epoch"].append(epoch)
-                sparsity_level_df["train_loss"].append(tr_l)
-                sparsity_level_df["test_loss"].append(te_l)
-                sparsity_level_df["train_acc"].append(tr_a)
-                sparsity_level_df["test_acc"].append(te_a)
+                sparsity_level_df.update({"epoch": epoch, "train_loss": tr_l, "test_loss": te_l, "train_acc": tr_a, "test_acc": te_a})
 
                 save_matching = (
                     (level == 0) and (training_type == "wr") and (epoch == 9)
@@ -366,7 +230,6 @@ class Harness:
                         self.optimizer.state_dict(),
                         os.path.join(self.expt_dir, "artifacts", "optimizer_rewind.pt"),
                     )
-            self.global_epoch += 1
 
         if self.gpu_id == 0:
             pd.DataFrame(sparsity_level_df).to_csv(
@@ -391,7 +254,6 @@ class Harness:
                 new_df = pd.DataFrame(data_df)
                 updated_df = pd.concat([pre_df, new_df], ignore_index=True)
                 updated_df.to_csv(summary_path, index=False)
-
 
 @param("dist_params.address")
 @param("dist_params.port")
@@ -468,20 +330,17 @@ if __name__ == "__main__":
     config.summary()
 
     prune_harness = pruning_utils.PruningStuff()
-    ## prune at init with er method
-    
-    prune_harness.prune_at_initialization(er_init=0.5)
+    prune_harness.prune_at_initialization()
     
     num_cycles = config['experiment_params.num_cycles']
-    print(num_cycles, config['prune_params.prune_rate'])
-    # if you provide resume level and resume experiment directory, it will pick up from where it stopped automatically
-    resume_level = config["experiment_params.resume_level"]
+    print(f"Number of Cycles: {num_cycles}, Magnitude Prune Rate: {config['prune_params.prune_rate']}")
     expt_dir = gen_expt_dir()
     save_config(expt_dir=expt_dir, config=config)
+
     densities = generate_densities()
     
     for level in range(num_cycles):
-        print(f'training cycle {level}')
+        print(f'Training cycle {level}')
         print(f'Sparsity is {print_sparsity_info(prune_harness.model, verbose=False)}')
 
         mp.spawn(
@@ -493,13 +352,15 @@ if __name__ == "__main__":
         print(f"Training level {level} complete, moving on to {level+1}")
     
     prune_harness.level_pruner(density=config['prune_params.prune_rate'])
-    print(f'Sparsity is {print_sparsity_info(prune_harness.model, verbose=False)}')
-    level = 100
 
+    print(f'Sparsity is {print_sparsity_info(prune_harness.model, verbose=False)}')
+
+    level = 100
     mp.spawn(
             main,
             args=(prune_harness.model, level, expt_dir),
             nprocs=world_size,
             join=True,
         )
+
     print(f"Training final level {level} complete, moving on to {level+1}") 

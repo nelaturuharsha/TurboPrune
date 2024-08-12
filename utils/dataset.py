@@ -7,40 +7,13 @@ import torchvision.datasets as datasets
 
 from fastargs import get_current_config
 from fastargs.decorators import param
-
 import numpy as np
-
-from typing import Optional
 
 IMAGENET_MEAN = np.array([0.485, 0.456, 0.406]) * 255
 IMAGENET_STD = np.array([0.229, 0.224, 0.225]) * 255
 DEFAULT_CROP_RATIO = 224 / 256
 
-config = get_current_config()
-
 get_current_config()
-try:
-    from ffcv.loader import Loader, OrderOption
-    from ffcv.transforms import (
-        ToTensor,
-        ToDevice,
-        Squeeze,
-        NormalizeImage,
-        RandomHorizontalFlip,
-        ToTorchImage,
-    )
-    from ffcv.fields.decoders import (
-        RandomResizedCropRGBImageDecoder,
-        CenterCropRGBImageDecoder,
-    )
-    from ffcv.fields.basics import IntDecoder
-except ImportError:
-    raise ImportError(
-        'FFCV is not installed. Please install FFCV to train on ImageNet. '
-        'You can install it by following the instructions provided in the repository'
-    )
-##else:
-#    print('FFCV imports are ignored since you arent training on ImageNet')
 
 class CIFARLoader:
     """Data loader for CIFAR-10 and CIFAR-100 datasets.
@@ -157,14 +130,37 @@ class imagenet:
     @param('dataset.num_workers')
     def __init__(self, data_root, batch_size, num_workers, this_device, distributed=False):
         self.this_device = this_device
+        self.config = get_current_config()
 
+        try:
+            from ffcv.loader import Loader, OrderOption
+            from ffcv.transforms import (
+                ToTensor,
+                ToDevice,
+                Squeeze,
+                NormalizeImage,
+                RandomHorizontalFlip,
+                ToTorchImage,
+            )
+            from ffcv.fields.decoders import (
+                RandomResizedCropRGBImageDecoder,
+                CenterCropRGBImageDecoder,
+            )
+            from ffcv.fields.basics import IntDecoder
+            print('FFCV loaded, all good -- you can work on ImageNet!')
+        except ImportError:
+            raise ImportError(
+                'FFCV is not installed. Please install FFCV to train on ImageNet. '
+                'You can install it by following the instructions provided in the repository'
+            )
+        
         train_image_pipeline = [
                 RandomResizedCropRGBImageDecoder((224, 224)),
                 RandomHorizontalFlip(),
                 ToTensor(),
                 ToDevice(torch.device(self.this_device), non_blocking=True),
                 ToTorchImage(),
-                NormalizeImage(IMAGENET_MEAN, IMAGENET_STD, np.float16),
+                NormalizeImage(IMAGENET_MEAN, IMAGENET_STD, np.float32),
             ]
 
         val_image_pipeline = [

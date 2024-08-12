@@ -1,7 +1,6 @@
 from fastargs import Param, Section
 from fastargs.validation import And, OneOf
 
-
 def get_current_params() -> None:
     """Define the various parameters and their constraints with fastargs."""
     Section("model_params", "model details").params(
@@ -15,11 +14,8 @@ def get_current_params() -> None:
             "Name of dataset",
             required=True,
         ),
-        num_classes=Param(
-            And(int, OneOf([10, 100, 1000])), "number of classes", required=True
-        ),
         batch_size=Param(int, "batch size", default=512),
-        num_workers=Param(int, "num_workers", default=8),
+        num_workers=Param(int, "num_workers", default=32),
         data_root=Param(str, "path to betons", required=True),
     )
 
@@ -48,7 +44,8 @@ def get_current_params() -> None:
             int, "level to resume from -- 0 if starting afresh", default=0
         ),
         resume_expt_name=Param(str, "resume path"),
-        num_cycles=Param(int, "number of cyclic repetition of the LR schedule in one cycle", default=1)
+        num_cycles=Param(int, "number of cyclic repetition of the LR schedule in one cycle", default=1),
+        training_precision = Param(And(str, OneOf(['bfloat16', 'float32'])), default='float32')
     )
 
     Section("optimizer", "data related stuff").params(
@@ -82,6 +79,7 @@ def get_current_params() -> None:
         address=Param(str, "default address", default="localhost"),
         port=Param(int, "default port", default=12350),
     )
+
 
 
 #
