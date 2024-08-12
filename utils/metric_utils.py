@@ -14,8 +14,6 @@ from utils.harness_utils import *
 import airbench
 from pyhessian import hessian
 
-
-
 get_current_config()
 
 def test(model):

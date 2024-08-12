@@ -9,10 +9,6 @@ import numpy as np
 import random
 import yaml
 
-from utils.pruning_utils import PruningStuff
-from utils.dataset import CIFARLoader
-
-from fastargs import get_current_config
 from fastargs.decorators import param
 from typing import Any, Dict, Optional, Tuple 
 
@@ -227,8 +223,7 @@ def set_seed(seed: int, is_deterministic: bool = False) -> None:
 @param("prune_params.prune_method")
 @param("prune_params.num_levels")
 @param("prune_params.prune_rate")
-def generate_densities(
-    prune_method: str, num_levels: int, prune_rate: float
+def generate_densities(prune_method: str, num_levels: int, prune_rate: float
 ) -> list[float]:
     """Generate a list of densities for pruning. The density is calculated as (1 - prune_rate) ^ i where i is the sparsity level.
        For example, if prune_rate = 0.2 and the num_levels = 5, the densities will be [1.0, 0.8, 0.64, 0.512, 0.4096].

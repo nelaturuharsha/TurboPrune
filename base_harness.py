@@ -16,7 +16,6 @@ from torch import optim
 import torch.multiprocessing as mp
 from torch.cuda.amp import autocast
 
-## torchvision
 ## file-based imports
 import utils.schedulers as schedulers
 import utils.pruning_utils as pruning_utils

@@ -14,7 +14,7 @@ from torch.amp import autocast
 from utils.conv_type import ConvMask, Conv1dMask, replace_layers
 from utils.harness_params import get_current_params
 from utils.custom_models import PreActResNet, PreActBlock
-from utils.dataset import imagenet
+from utils.dataset import imagenet, CIFARLoader
 
 ## fastargs
 from fastargs import get_current_config
@@ -66,8 +66,9 @@ class PruningStuff:
             self.loaders = imagenet(distributed=False, this_device='cuda:0')
             self.train_loader = self.loaders.train_loader
         elif 'CIFAR' in self.config['dataset.dataset_name']:
-            self.train_loader = airbench.CifarLoader(path='./cifar10', batch_size=512, train=True, aug={'flip' : True, 'translate' : 2}, altflip=True)
-        
+            #self.train_loader = airbench.CifarLoader(path='./cifar10', batch_size=512, train=True, aug={'flip' : True, 'translate' : 2}, altflip=True)
+            self.loaders = CIFARLoader(distributed=False)
+            self.train_loader = self.loaders.train_loader
         if model is None:
             self.model = self.acquire_model()
         else:
