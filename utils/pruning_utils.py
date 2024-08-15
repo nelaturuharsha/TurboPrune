@@ -119,8 +119,8 @@ class PruningStuff:
             )
 
         replace_layers(model=model)
-        #if 'resnet18' in model_name:
-        #    model.load_state_dict(torch.load(os.path.join(self.config['experiment_params.base_dir'], 'base_resnet18_ckpt.pt')))
+        if 'resnet18' in model_name:
+            model.load_state_dict(torch.load(os.path.join(self.config['experiment_params.base_dir'], 'base_resnet18_ckpt.pt')))
         if ('resnet50' in model_name) and ('ImageNet' in dataset_name):
             model.load_state_dict(torch.load(os.path.join(self.config['experiment_params.base_dir'], 'imagenet_resnet50_ckpt.pt'))) 
         elif ('resnet50' in model_name) and ('CIFAR100' in dataset_name):

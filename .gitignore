@@ -177,3 +177,4 @@ ImageNet/
 Thesis/
 dump_ckpt.py
 test_ckpt.py
+heatmap/

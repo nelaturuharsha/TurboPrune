@@ -25,6 +25,7 @@ from utils.dataset import CIFARLoader, imagenet
 ## fastargs
 from fastargs import get_current_config
 from fastargs.decorators import param
+import schedulefree
 
 
 class Harness:
@@ -70,8 +71,9 @@ class Harness:
     @param("optimizer.momentum")
     @param("optimizer.weight_decay")
     @param("optimizer.scheduler_type")
+    @param("experiment_params.epochs_per_level")
     def create_optimizers(
-        self, lr: float, momentum: float, weight_decay: float, scheduler_type: str
+        self, lr: float, momentum: float, weight_decay: float, scheduler_type: str, epochs_per_level: int
     ) -> None:
         """Instantiate the optimizer and learning rate scheduler.
 
@@ -81,16 +83,37 @@ class Harness:
             weight_decay (float): Weight decay for optimizer.
             scheduler_type (str): Type of scheduler.
         """
-        self.optimizer = optim.SGD(
-            self.model.parameters(), lr=lr, momentum=momentum, weight_decay=weight_decay
-        )
-        scheduler = getattr(schedulers, scheduler_type)
-        if scheduler_type == "TriangularSchedule":
-            self.scheduler = scheduler(
-                optimizer=self.optimizer, steps_per_epoch=len(self.train_loader)
+        if scheduler_type =='ScheduleFree':
+            self.optimizer = schedulefree.SGDScheduleFree(
+                self.model.parameters(),
+                warmup_steps=self.config['optimizer.warmup_steps'],
+                lr=lr,
+                momentum=momentum,
+                weight_decay=weight_decay,
             )
+            self.scheduler = None
+            print('using schedule free')
+        
         else:
-            self.scheduler = scheduler(optimizer=self.optimizer)
+            self.optimizer = optim.SGD(
+                    self.model.parameters(), lr=lr, momentum=momentum, weight_decay=weight_decay
+                )
+            if scheduler_type != 'OneCycleLR':
+                scheduler = getattr(schedulers, scheduler_type)            
+                
+                if scheduler_type == 'TriangularSchedule':
+                    self.scheduler = scheduler(optimizer=self.optimizer, steps_per_epoch=len(self.train_loader), epochs_per_level=epochs_per_level)
+                elif scheduler_type == 'TrapezoidalSchedule':
+                    self.scheduler = scheduler(optimizer=self.optimizer, steps_per_epoch=len(self.train_loader),
+                                                warmup_steps=len(self.train_loader) * self.config['optimizer.warmup_steps'],
+                                                cooldown_steps=len(self.train_loader) * self.config['optimizer.cooldown_steps'])
+                elif scheduler_type == 'MultiStepLRWarmup':
+                    self.scheduler = scheduler(optimizer=self.optimizer)
+            else:
+                self.scheduler = optim.lr_scheduler.OneCycleLR(self.optimizer,
+                                                              max_lr=lr,
+                                                              epochs=epochs_per_level,
+                                                              steps_per_epoch=len(self.train_loader))
 
     def train_one_epoch(self, epoch: int) -> Tuple[float, float]:
         """Train the model for one epoch.
@@ -129,10 +152,12 @@ class Harness:
             total += targets.size(0)
             correct += predicted.eq(targets).sum().item()
 
-            if self.config["optimizer.scheduler_type"] == "TriangularSchedule":
+            if (self.scheduler is not None) and (self.config['optimizer.scheduler_type'] != 'MultiStepLRWarmup'):
+                #print('Running Trapezoidal/Triangular/OneCycle')
                 self.scheduler.step()
-
-        if self.config["optimizer.scheduler_type"] != "TriangularSchedule":
+            
+        if self.config["optimizer.scheduler_type"] == 'MultiStepLRWarmup':
+            #print('Step LR')
             self.scheduler.step()
         train_loss /= len(self.train_loader)
         accuracy = 100.0 * (correct / total)
@@ -218,8 +243,11 @@ class Harness:
                 tr_l, tr_a, te_l, te_a = [metric.item() for metric in metrics]
                 new_table.add_row([epoch, tr_l, te_l, tr_a, te_a])
                 print(new_table)
-                sparsity_level_df.update({"epoch": epoch, "train_loss": tr_l, "test_loss": te_l, "train_acc": tr_a, "test_acc": te_a})
-
+                sparsity_level_df["epoch"].append(round(epoch, 4))
+                sparsity_level_df["train_loss"].append(round(tr_l, 4))
+                sparsity_level_df["test_loss"].append(round(te_l, 4))
+                sparsity_level_df["train_acc"].append(round(tr_a, 4))
+                sparsity_level_df["test_acc"].append(round(te_a, 4))
                 save_matching = (
                     (level == 0) and (training_type == "wr") and (epoch == 9)
                 )
