@@ -29,6 +29,8 @@ from typing import Tuple
 
 from utils.dataset import CIFARLoader, imagenet
 
+import schedulefree
+
 class Harness:
     """Harness class to handle training and evaluation.
 
@@ -73,8 +75,9 @@ class Harness:
     @param("optimizer.momentum")
     @param("optimizer.weight_decay")
     @param("optimizer.scheduler_type")
+    @param("experiment_params.epochs_per_level")
     def create_optimizers(
-        self, lr: float, momentum: float, weight_decay: float, scheduler_type: str
+        self, lr: float, momentum: float, weight_decay: float, scheduler_type: str, epochs_per_level: int
     ) -> None:
         """Instantiate the optimizer and learning rate scheduler.
 
@@ -84,17 +87,37 @@ class Harness:
             weight_decay (float): Weight decay for optimizer.
             scheduler_type (str): Type of scheduler.
         """
-        print('resetting optimizer and LR')
-        self.optimizer = optim.SGD(
-            self.model.parameters(), lr=lr, momentum=momentum, weight_decay=weight_decay
-        )
-        scheduler = getattr(schedulers, scheduler_type)
-        if scheduler_type == "TriangularSchedule":
-            self.scheduler = scheduler(
-                optimizer=self.optimizer, steps_per_epoch=len(self.train_loader)
+        if scheduler_type =='ScheduleFree':
+            self.optimizer = schedulefree.SGDScheduleFree(
+                self.model.parameters(),
+                warmup_steps=self.config['optimizer.warmup_steps'],
+                lr=lr,
+                momentum=momentum,
+                weight_decay=weight_decay,
             )
+            self.scheduler = None
+            print('using schedule free')
+        
         else:
-            self.scheduler = scheduler(optimizer=self.optimizer)
+            self.optimizer = optim.SGD(
+                    self.model.parameters(), lr=lr, momentum=momentum, weight_decay=weight_decay
+                )
+            if scheduler_type != 'OneCycleLR':
+                scheduler = getattr(schedulers, scheduler_type)            
+                
+                if scheduler_type == 'TriangularSchedule':
+                    self.scheduler = scheduler(optimizer=self.optimizer, steps_per_epoch=len(self.train_loader), epochs_per_level=epochs_per_level)
+                elif scheduler_type == 'TrapezoidalSchedule':
+                    self.scheduler = scheduler(optimizer=self.optimizer, steps_per_epoch=len(self.train_loader),
+                                                warmup_steps=len(self.train_loader) * self.config['optimizer.warmup_steps'],
+                                                cooldown_steps=len(self.train_loader) * self.config['optimizer.cooldown_steps'])
+                elif scheduler_type == 'MultiStepLRWarmup':
+                    self.scheduler = scheduler(optimizer=self.optimizer)
+            else:
+                self.scheduler = optim.lr_scheduler.OneCycleLR(self.optimizer,
+                                                              max_lr=lr,
+                                                              epochs=epochs_per_level,
+                                                              steps_per_epoch=len(self.train_loader))
 
     def train_one_epoch(self, epoch: int) -> Tuple[float, float]:
         """Train the model for one epoch.
@@ -104,7 +127,6 @@ class Harness:
         Returns:
             (float, float): Training loss and accuracy.
         """
-
         if "CIFAR" in self.config["dataset.dataset_name"]:
             self.loaders.train_sampler.set_epoch(epoch)
         model = self.model
@@ -121,10 +143,11 @@ class Harness:
                 )
 
             self.optimizer.zero_grad()
-            
             with autocast(dtype=self.precision, enabled = self.use_amp):
                 outputs = model(inputs.contiguous())
                 loss = self.criterion(outputs, targets)
+            outputs = model(inputs)
+            loss = self.criterion(outputs, targets)
             loss.backward()
             self.optimizer.step()
 
@@ -132,7 +155,14 @@ class Harness:
             _, predicted = outputs.max(1)
             total += targets.size(0)
             correct += predicted.eq(targets).sum().item()
-        self.scheduler.step()
+
+            if (self.scheduler is not None) and (self.config['optimizer.scheduler_type'] != 'MultiStepLRWarmup'):
+                #print('Running Trapezoidal/Triangular/OneCycle')
+                self.scheduler.step()
+            
+        if self.config["optimizer.scheduler_type"] == 'MultiStepLRWarmup':
+            #print('Step LR')
+            self.scheduler.step()
         train_loss /= len(self.train_loader)
         accuracy = 100.0 * (correct / total)
         return train_loss, accuracy
@@ -173,7 +203,8 @@ class Harness:
     @param("experiment_params.epochs_per_level")
     @param("experiment_params.training_type")
     def train_one_level(
-        self, epochs_per_level: int, training_type: str, level: int) -> None:
+        self, epochs_per_level: int, training_type: str, level: int
+    ) -> None:
         """Train the model for one full level. This can thought of as one full training run.
 
         Args:
@@ -208,7 +239,7 @@ class Harness:
             test_loss, test_acc = self.test()
 
             metrics = [torch.tensor(val).to(self.model.device) for val in [train_loss, train_acc, test_loss, test_acc]]
-            
+
             for metric in metrics:
                 dist.reduce(metric, dst=0, op=dist.ReduceOp.AVG)
 
@@ -216,8 +247,11 @@ class Harness:
                 tr_l, tr_a, te_l, te_a = [metric.item() for metric in metrics]
                 new_table.add_row([epoch, tr_l, te_l, tr_a, te_a])
                 print(new_table)
-                sparsity_level_df.update({"epoch": epoch, "train_loss": tr_l, "test_loss": te_l, "train_acc": tr_a, "test_acc": te_a})
-
+                sparsity_level_df["epoch"].append(round(epoch, 4))
+                sparsity_level_df["train_loss"].append(round(tr_l, 4))
+                sparsity_level_df["test_loss"].append(round(te_l, 4))
+                sparsity_level_df["train_acc"].append(round(tr_a, 4))
+                sparsity_level_df["test_acc"].append(round(te_a, 4))
                 save_matching = (
                     (level == 0) and (training_type == "wr") and (epoch == 9)
                 )
@@ -330,6 +364,7 @@ if __name__ == "__main__":
     config.summary()
 
     prune_harness = pruning_utils.PruningStuff()
+    
     prune_harness.prune_at_initialization()
     
     num_cycles = config['experiment_params.num_cycles']
