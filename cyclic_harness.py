@@ -242,7 +242,8 @@ class Harness:
         }
 
         for epoch in range(epochs_per_level):
-            train_loss, train_acc = self.train_one_epoch(epoch)
+            # train_loss, train_acc = self.train_one_epoch(epoch)
+            train_loss, train_acc = 0, 0
             test_loss, test_acc = self.test()
 
             metrics = [torch.tensor(val).to(self.model.device) for val in [train_loss, train_acc, test_loss, test_acc]]
