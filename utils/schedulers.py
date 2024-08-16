@@ -128,44 +128,6 @@ class MultiStepLRWarmup(LRScheduler):
             return _warmup_lr(self.lr, self.warmup_steps, self.last_epoch)
         else:
             return self.lr * (0.1 ** ((self.last_epoch - self.warmup_steps) // 60))
-'''
-
-class MultiStepLRWarmup(LRScheduler):
-    """Step learning rate scheduler with warmup, for CIFAR datasets.
-       Default schedule assumes total training epochs of 40.
-
-    Args:
-        lr (float): Initial learning rate.
-        warmup_steps (int): Number of warmup epochs.
-        optimizer (Optimizer): Wrapped optimizer.
-        last_epoch (int, optional): The index of last epoch. Default is -1.
-    """
-
-    @param("optimizer.lr")
-    @param("optimizer.warmup_steps")
-    def __init__(
-        self, lr: float, warmup_steps: int, optimizer: Optimizer, last_epoch: int = -1
-    ) -> None:
-        super().__init__(optimizer, last_epoch)
-        self.lr = lr
-        self.warmup_steps = warmup_steps
-
-    def get_lr(self) -> float:
-        """Compute the learning rate for the current epoch.
-
-        Returns:
-            float: Learning rate for the current epoch.
-        """
-        if self.last_epoch < self.warmup_steps:
-            return self.lr * (self.last_epoch + 1) / self.warmup_steps
-        elif self.last_epoch < :
-            return self.lr
-        elif self.last_epoch < 27:
-            return self.lr * 0.1
-        else:
-            return self.lr * 0.01
-'''
-
 
 class ImageNetLRDropsWarmup(LRScheduler):
     """Step learning rate scheduler with warmup for ImageNet.
