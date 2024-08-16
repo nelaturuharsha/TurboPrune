@@ -1,10 +1,9 @@
 import torch
 import os
 import prettytable
-from utils.conv_type import ConvMask, Conv1dMask
+from utils.conv_type import ConvMask, Conv1dMask, LinearMask
 from datetime import datetime
 import uuid
-
 import numpy as np
 import random
 import yaml
@@ -138,7 +137,7 @@ def print_sparsity_info(model: torch.nn.Module, verbose: bool = True) -> float:
     total_params_kept = 0
     
     for name, layer in model.named_modules():
-        if isinstance(layer, (ConvMask, Conv1dMask)):
+        if isinstance(layer, (ConvMask, Conv1dMask, LinearMask)):
             weight_mask = layer.mask
             sparsity, remaining, total = compute_sparsity(weight_mask)
             my_table.add_row([name, sparsity, 1 - sparsity, f"{remaining}/{total}"])
@@ -158,9 +157,10 @@ def print_sparsity_info(model: torch.nn.Module, verbose: bool = True) -> float:
 
 @param("experiment_params.base_dir")
 @param("experiment_params.resume_level")
+@param("experiment_params.expt_name")
 @param("experiment_params.resume_expt_name")
 def gen_expt_dir(
-    base_dir: str, resume_level: int, resume_expt_name: Optional[str] = None
+    base_dir: str, resume_level: int, expt_name: str, resume_expt_name: Optional[str] = None
 ) -> str:
     """Create a new experiment directory and all the necessary subdirectories.
        If provided, instead of creating a new directory -- set the directory to the one provided.
@@ -179,7 +179,7 @@ def gen_expt_dir(
     elif resume_level == 0 and resume_expt_name is None:
         current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
         unique_id = uuid.uuid4().hex[:6]
-        unique_name = f"experiment_{current_time}_{unique_id}"
+        unique_name = f"experiment_{expt_name}_{current_time}_{unique_id}"
         expt_dir = os.path.join(base_dir, unique_name)
         print(f"Creating this Folder {expt_dir}:)")
     else:

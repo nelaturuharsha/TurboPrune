@@ -70,14 +70,15 @@ class Harness:
             'float32': (torch.float32, False)
         }
         return dtype_map.get(training_precision, (torch.float32, False))
-
+    
+    @param("optimizer.optim_type")
     @param("optimizer.lr")
     @param("optimizer.momentum")
     @param("optimizer.weight_decay")
     @param("optimizer.scheduler_type")
     @param("experiment_params.epochs_per_level")
     def create_optimizers(
-        self, lr: float, momentum: float, weight_decay: float, scheduler_type: str, epochs_per_level: int
+        self, optim_type: str, lr: float, momentum: float, weight_decay: float, scheduler_type: str, epochs_per_level: int
     ) -> None:
         """Instantiate the optimizer and learning rate scheduler.
 
@@ -98,6 +99,12 @@ class Harness:
             self.scheduler = None
             print('using schedule free')
         
+        elif optim_type == 'AdamW':
+            self.optimizer = optim.AdamW(self.model.parameters(), lr=lr, betas=(0.9, 0.999), eps=1e-08, weight_decay=0.01)
+            scheduler = getattr(schedulers, scheduler_type)                
+            if scheduler_type == 'TriangularSchedule':
+                self.scheduler = scheduler(optimizer=self.optimizer, steps_per_epoch=len(self.train_loader), epochs_per_level=epochs_per_level)
+                
         else:
             self.optimizer = optim.SGD(
                     self.model.parameters(), lr=lr, momentum=momentum, weight_decay=weight_decay
@@ -235,7 +242,8 @@ class Harness:
         }
 
         for epoch in range(epochs_per_level):
-            train_loss, train_acc = self.train_one_epoch(epoch)
+            # train_loss, train_acc = self.train_one_epoch(epoch)
+            train_loss, train_acc = 0, 0
             test_loss, test_acc = self.test()
 
             metrics = [torch.tensor(val).to(self.model.device) for val in [train_loss, train_acc, test_loss, test_acc]]

@@ -53,8 +53,8 @@ class LinearMask(nn.Linear):
         **kwargs: Keyword arguments for nn.Linear.
     """
 
-    def __init__(self, **kwargs: any) -> None:
-        super().__init__(**kwargs)
+    def __init__(self, in_features, out_features, bias=True, **kwargs: any) -> None:
+        super().__init__(in_features, out_features, bias=True, **kwargs)
         self.register_buffer("mask", torch.ones_like(self.weight))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -175,5 +175,44 @@ def replace_layers(conv_type: str, model: nn.Module) -> nn.Module:
             )
             setattr(parent_module, parts[-1], conv_mask_layer)
 
+    print(model)
+    return model
+
+
+
+@param('model_params.conv_type')
+def replace_vit_layers(conv_type: str, model: nn.Module) -> nn.Module:
+    """
+    For a ViT, replaces the Linear layers with LinearMask
+
+    Args:
+        conv_type (str): The type of masked layer to use (e.g., 'LinearMask').
+        model (nn.Module): The model in which to replace layers.
+
+    Returns:
+        nn.Module: The model with replaced layers.
+    """
+    layers_to_replace = []
+
+    conv_layer_of_type = globals().get(conv_type)
+
+    for name, layer in model.named_modules():
+        if isinstance(layer, (nn.Linear)):
+            layers_to_replace.append((name, layer))
+
+    for name, layer in layers_to_replace:
+        parts = name.split(".")
+        parent_module = model
+        for part in parts[:-1]:
+            parent_module = getattr(parent_module, part)
+
+        if isinstance(layer, nn.Linear):
+            in_features = layer.in_features
+            out_features = layer.out_features
+            bias = layer.bias is not None
+            conv_layer = LinearMask(in_features, out_features, bias=bias)
+            setattr(parent_module, parts[-1], conv_layer)
+
+    print('Replaced layers with the LinearMask which can be sparsified.')
     print(model)
     return model

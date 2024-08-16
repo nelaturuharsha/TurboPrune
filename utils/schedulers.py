@@ -159,9 +159,6 @@ class ImageNetLRDropsWarmup(LRScheduler):
         else:
             return (0.1**2) * self.lr
 
-
-
-
 def step_trapezoidal(it, lr, num_iterations, warmup_iters, warmdown_iters):
     # 1) linear warmup for warmup_iters steps
     assert it <= num_iterations
@@ -174,6 +171,7 @@ def step_trapezoidal(it, lr, num_iterations, warmup_iters, warmdown_iters):
     else:
         decay_ratio = (num_iterations - it) / warmdown_iters
         return decay_ratio
+
 
 @param("experiment_params.epochs_per_level")
 @param('optimizer.lr')
