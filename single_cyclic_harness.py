@@ -349,7 +349,7 @@ class Harness:
             "sparsity": [],
             "max_test_acc": [],
             "final_test_acc": [],
-            "hessian_trace" : [],
+            #"hessian_trace" : [],
             "training_schedule" : [] }
         
 
@@ -410,7 +410,7 @@ class Harness:
             data_df["sparsity"].append(round(sparsity, 4))
             data_df["final_test_acc"].append(round(test_acc, 4))
             data_df["max_test_acc"].append(round(max(sparsity_level_df["test_acc"]), 4))
-            data_df['hessian_trace'].append(hessian_trace(self.train_loader, model=self.model))
+            #data_df['hessian_trace'].append(hessian_trace(self.train_loader, model=self.model))
             epoch_schedule_str = '-'.join(map(str, epoch_schedule))
             data_df['training_schedule'].append(epoch_schedule_str)
             wandb.log({

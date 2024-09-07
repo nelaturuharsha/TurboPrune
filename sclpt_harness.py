@@ -23,26 +23,10 @@ from utils.metric_utils import *
 from fastargs import get_current_config
 from fastargs.decorators import param
 
-import wandb
+from utils.dataset import imagenet
 
-##ffcv
-try:
-    from ffcv.loader import Loader, OrderOption
-    from ffcv.transforms import (
-        ToTensor,
-        ToDevice,
-        Squeeze,
-        NormalizeImage,
-        RandomHorizontalFlip,
-        ToTorchImage,
-    )
-    from ffcv.fields.decoders import (
-        RandomResizedCropRGBImageDecoder,
-        CenterCropRGBImageDecoder,
-    )
-    from ffcv.fields.basics import IntDecoder
-except:
-    pass
+import wandb
+wandb.require("core")
 
 import schedulefree
 from typing import List, Tuple
@@ -71,115 +55,19 @@ class Harness:
         self.criterion = nn.CrossEntropyLoss()
 
         if "CIFAR" not in self.config["dataset.dataset_name"]:
-            raise ValueError('Not Implemented')
+            self.loaders = imagenet(distributed=False, this_device = self.this_device)
+            self.train_loader = self.loaders.train_loader
+            self.test_loader = self.loaders.test_loader
         else:
             self.train_loader = CifarLoader(path='./cifar10', batch_size=512, train=True, aug={'flip' : True, 'translate' : 2}, altflip=True, dataset=self.config['dataset.dataset_name'])
             self.test_loader = CifarLoader(path='./cifar10', batch_size=512, train=False, dataset=self.config['dataset.dataset_name'])
 
         self.model = model.to(self.this_device)
-        #self.model = torch.compile(self.model, mode='reduce-overhead')
         self.create_optimizers(epochs_per_level=self.config['experiment_params.epochs_per_level'])
         
         self.prefix, self.expt_dir = expt_dir
 
         self.epoch_counter = 0
-
-    @param("dataset.batch_size")
-    @param("dataset.num_workers")
-    @param("dataset.data_root")
-    def create_train_loader(
-        self,
-        batch_size: int,
-        num_workers: int,
-        data_root: str,
-        distributed: bool = True,
-    ) -> Any:
-        """Create the train dataloader.
-
-        Args:
-            batch_size (int): Batch size for data loading.
-            num_workers (int): Number of workers for data loading.
-            data_root (str): Root directory for data.
-            distributed (bool, optional): Whether to use distributed data loading. Default is True.
-
-        Returns:
-            Any: Train dataloader.
-        """
-        train_image_pipeline = [
-            RandomResizedCropRGBImageDecoder((224, 224)),
-            RandomHorizontalFlip(),
-            ToTensor(),
-            ToDevice(torch.device(self.this_device), non_blocking=True),
-            ToTorchImage(),
-            NormalizeImage(IMAGENET_MEAN, IMAGENET_STD, np.float32),
-        ]
-
-        label_pipeline = [
-            IntDecoder(),
-            ToTensor(),
-            Squeeze(),
-            ToDevice(torch.device(self.this_device), non_blocking=True),
-        ]
-
-        train_loader = Loader(
-            os.path.join(data_root, "train_500_0.50_90.beton"),
-            batch_size=batch_size,
-            num_workers=num_workers,
-            order=OrderOption.RANDOM,
-            os_cache=True,
-            drop_last=True,
-            pipelines={"image": train_image_pipeline, "label": label_pipeline},
-            distributed=distributed,
-        )
-
-        return train_loader
-
-    @param("dataset.batch_size")
-    @param("dataset.num_workers")
-    @param("dataset.data_root")
-    def create_test_loader(
-        self,
-        batch_size: int,
-        num_workers: int,
-        data_root: str,
-        distributed: bool = True,
-    ) -> Any:
-        """Create the test dataloader.
-
-        Args:
-            batch_size (int): Batch size for data loading.
-            num_workers (int): Number of workers for data loading.
-            data_root (str): Root directory for data.
-            distributed (bool, optional): Whether to use distributed data loading. Default is True.
-
-        Returns:
-            Any: Test dataloader.
-        """
-        val_image_pipeline = [
-            CenterCropRGBImageDecoder((256, 256), ratio=DEFAULT_CROP_RATIO),
-            ToTensor(),
-            ToDevice(torch.device(self.this_device), non_blocking=True),
-            ToTorchImage(),
-            NormalizeImage(IMAGENET_MEAN, IMAGENET_STD, np.float32),
-        ]
-
-        label_pipeline = [
-            IntDecoder(),
-            ToTensor(),
-            Squeeze(),
-            ToDevice(torch.device(self.this_device), non_blocking=True),
-        ]
-
-        val_loader = Loader(
-            os.path.join(data_root, "val_500_0.50_90.beton"),
-            batch_size=batch_size,
-            num_workers=num_workers,
-            order=OrderOption.SEQUENTIAL,
-            drop_last=False,
-            pipelines={"image": val_image_pipeline, "label": label_pipeline},
-            distributed=distributed,
-        )
-        return val_loader
 
     @param("optimizer.lr")
     @param("optimizer.momentum")
@@ -349,12 +237,11 @@ class Harness:
             "sparsity": [],
             "max_test_acc": [],
             "final_test_acc": [],
-            "hessian_trace" : [],
+            #"hessian_trace" : [],
             "training_schedule" : [] }
         
-
-        #epoch_schedule = generate_epoch_schedule()
         epoch_schedule = generate_budgeted_schedule()
+        
         print(f'Epoch Schedule: {epoch_schedule}')
         for cycle in range(num_cycles):
             print('#' * 50)
@@ -395,7 +282,8 @@ class Harness:
                             self.optimizer.state_dict(),
                             os.path.join(self.expt_dir, "artifacts", "optimizer_rewind.pt"),
                         )
-
+                if self.config['cyclic_training.num_cycles'] > 1:
+                    torch.save(self.model.state_dict(), os.path.join(self.expt_dir, 'checkpoints', f'model_cycle_{cycle}.pt'))
         if self.gpu_id == 0:
             pd.DataFrame(sparsity_level_df).to_csv(
                 os.path.join(
@@ -410,7 +298,7 @@ class Harness:
             data_df["sparsity"].append(round(sparsity, 4))
             data_df["final_test_acc"].append(round(test_acc, 4))
             data_df["max_test_acc"].append(round(max(sparsity_level_df["test_acc"]), 4))
-            data_df['hessian_trace'].append(hessian_trace(self.train_loader, model=self.model))
+            #data_df['hessian_trace'].append(hessian_trace(self.train_loader, model=self.model))
             epoch_schedule_str = '-'.join(map(str, epoch_schedule))
             data_df['training_schedule'].append(epoch_schedule_str)
             wandb.log({
@@ -481,6 +369,7 @@ def initialize_config():
 
 if __name__ == "__main__":
     config = initialize_config()
+    resume_level = 0
 
     wandb.init(project=config['wandb_params.project_name'])
     world_size = torch.cuda.device_count()
@@ -490,62 +379,27 @@ if __name__ == "__main__":
 
     prune_harness = pruning_utils.PruningStuff()
 
-    resume_level = config["experiment_params.resume_level"]
+    #### STEP ONE: Prune at init #### 
+    prune_harness.prune_at_initialization()
+
     prefix, expt_dir = gen_expt_dir()
-    print(expt_dir)
+
     packaged = (prefix, expt_dir)
     save_config(expt_dir=expt_dir, config=config)
-
-    is_iterative = (config['prune_params.er_method'] == 'just dont') and (config['prune_params.prune_method'] != 'just dont')
     
-    metric_path = os.path.join(expt_dir, 'metrics')
-    perturbation_dict_path = os.path.join(metric_path, 'perturbation.csv')
-    pert_stats = {'level'         : [],
-                  'pre_sparsity'  : [],
-                  'post_sparsity' : [],
-                  'pre_test_acc'  : [],
-                  'post_test_acc' : [],
-                  'perturbation'  : []}
-    
-    #densities = generate_densities()
-    densities = [config['prune_params.er_init']]
-    for level in range(resume_level, len(densities)):
-        print_sparsity_info(prune_harness.model, verbose=False)
-        if is_iterative:
-            if level != 0:
-                perturbation_level_dict = compute_perturbation(
-                                                            model = prune_harness.model,
-                                                            density=densities[level],
-                                                            perturbation_table=perturbation_table,
-                                                            level=level) 
-                pert_stats['level'].append(perturbation_level_dict['level'])
-                pert_stats['pre_sparsity'].append(perturbation_level_dict['pre_sparsity'])
-                pert_stats['post_sparsity'].append(perturbation_level_dict['post_sparsity'])
-                pert_stats['pre_test_acc'].append(perturbation_level_dict['pre_test_acc'])
-                pert_stats['post_test_acc'].append(perturbation_level_dict['post_test_acc'])
-                pert_stats['perturbation'].append(perturbation_level_dict['perturbation'])
-                
-                pd.DataFrame(pert_stats).to_csv(perturbation_dict_path, index=False)
-                
-                print(f"Pruning Model at level: {level}")
-                prune_harness.load_from_ckpt(
-                    os.path.join(expt_dir, "checkpoints", f"model_level_{level-1}.pt")
-                )
-                prune_harness.level_pruner(density=densities[level])
-                prune_harness.model = reset_weights(
-                    expt_dir=expt_dir,
-                    model=prune_harness.model,
-                    training_type=config["experiment_params.training_type"],
-                )
-        else:
-            print('we out here pruning at init')
-            prune_harness.prune_at_initialization(er_init=densities[level])
+    #### STEP TWO: Cyclic Training ####
+    print_sparsity_info(prune_harness.model, verbose=False)
+    main(model = prune_harness.model, level=0, expt_dir=packaged)
 
-            print_sparsity_info(prune_harness.model, verbose=False)
-        main(model = prune_harness.model, level=level, expt_dir=packaged)
-        if (level != 0) and (is_iterative):
-            linear_mode = LinearModeConnectivity(expt_path=expt_dir, model=prune_harness.model)
-            linear_mode.gen_linear_mode(level1=level-1, level2=level)
-        print(f"Training level {level} complete, moving on to {level+1}") 
+    #### STEP THREE: Magnitude Pruning to Target ####
+    prune_harness.level_pruner(density=float(config['prune_params.prune_rate']))
+
+    level = 100
+
+    harness = Harness(model=prune_harness.model, expt_dir=packaged, gpu_id=0)
+
+    harness.train_one_level(num_cycles=1, level=level)
+    ckpt = os.path.join(expt_dir, "checkpoints", f"model_level_{level}.pt")
+    torch.save(harness.model.state_dict(), ckpt)
 
     wandb.finish()

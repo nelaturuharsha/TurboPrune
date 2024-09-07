@@ -21,7 +21,7 @@ from fastargs import get_current_config
 from fastargs.decorators import param
 from typing import Optional, Dict, Any
 
-import airbench
+from utils.airbench_loader import CifarLoader
 
 get_current_params()
 
@@ -59,16 +59,18 @@ class PruningStuff:
             model (nn.Module, optional): The model to prune. Default is None.
                                          If no model is provided, then one is automatically set based on configuration.
         """
-        self.this_device = "cuda:0"
+        self.this_device = "cuda"
         self.config = get_current_config()
 
         if self.config['dataset.dataset_name'] == 'ImageNet':
-            self.loaders = imagenet(distributed=False, this_device='cuda:0')
+            self.loaders = imagenet(distributed=False, this_device='cuda')
             self.train_loader = self.loaders.train_loader
         elif 'CIFAR' in self.config['dataset.dataset_name']:
-            #self.train_loader = airbench.CifarLoader(path='./cifar10', batch_size=512, train=True, aug={'flip' : True, 'translate' : 2}, altflip=True)
-            self.loaders = CIFARLoader(distributed=False)
-            self.train_loader = self.loaders.train_loader
+            if torch.cuda.device_count() == 1:
+                self.train_loader = CifarLoader(path='./cifar10', batch_size=512, train=True, aug={'flip' : True, 'translate' : 2}, altflip=True, dataset=self.config['dataset.dataset_name'])
+            else:
+                self.loaders = CIFARLoader(distributed=False)
+                self.train_loader = self.loaders.train_loader
         if model is None:
             self.model = self.acquire_model()
         else:
@@ -106,26 +108,8 @@ class PruningStuff:
                 3, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False
             )
             model.maxpool = nn.Identity()
-        if "CIFAR" in dataset_name and "vgg11" in model_name:
-            model.avgpool = nn.AdaptiveAvgPool2d((1, 1))
-            model.classifier = nn.Sequential(
-                nn.Linear(512 * 1 * 1, 4096),
-                nn.ReLU(True),
-                nn.Dropout(),
-                nn.Linear(4096, 4096),
-                nn.ReLU(True),
-                nn.Dropout(),
-                nn.Linear(4096, num_classes),
-            )
 
         replace_layers(model=model)
-        if 'resnet18' in model_name:
-            model.load_state_dict(torch.load(os.path.join(self.config['experiment_params.base_dir'], 'base_resnet18_ckpt.pt')))
-        if ('resnet50' in model_name) and ('ImageNet' in dataset_name):
-            model.load_state_dict(torch.load(os.path.join(self.config['experiment_params.base_dir'], 'imagenet_resnet50_ckpt.pt'))) 
-        elif ('resnet50' in model_name) and ('CIFAR100' in dataset_name):
-            model.load_state_dict(torch.load(os.path.join(self.config['experiment_params.base_dir'], 'cifar100_resnet50_ckpt.pt')))
-
 
         model.to(self.this_device)
         return model
@@ -151,7 +135,7 @@ class PruningStuff:
                 total += m.mask.numel()
                 nonzero += m.mask.sum()
         
-        print(f'density is {(total / nonzero) * 100:3f}')
+        print(f'density is {(nonzero / total) * 100:3f}')
                 
         print('prior to pruning at init')
         er_method_name = f"prune_{er_method}"

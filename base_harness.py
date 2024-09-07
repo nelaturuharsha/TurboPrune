@@ -34,7 +34,7 @@ class Harness:
     Args:
         gpu_id (int): current rank of the process while training using DDP.
         expt_dir (str): Experiment directory to save artifacts/checkpoints/metrics to.
-        model (Optional[nn.Module], optional): The model to train.
+        model (Optional[nn.Module], optional): The model to trai.
     """
 
     def __init__(self, gpu_id: int, expt_dir: str, model: nn.Module) -> None:
@@ -66,14 +66,15 @@ class Harness:
             'float32': (torch.float32, False)
         }
         return dtype_map.get(training_precision, (torch.float32, False))
-
+    
+    @param("optimizer.optim_type")
     @param("optimizer.lr")
     @param("optimizer.momentum")
     @param("optimizer.weight_decay")
     @param("optimizer.scheduler_type")
     @param("experiment_params.epochs_per_level")
     def create_optimizers(
-        self, lr: float, momentum: float, weight_decay: float, scheduler_type: str, epochs_per_level: int
+        self, optim_type: str, lr: float, momentum: float, weight_decay: float, scheduler_type: str, epochs_per_level: int
     ) -> None:
         """Instantiate the optimizer and learning rate scheduler.
 
@@ -94,6 +95,12 @@ class Harness:
             self.scheduler = None
             print('using schedule free')
         
+        elif optim_type == 'AdamW':
+            self.optimizer = optim.AdamW(self.model.parameters(), lr=lr, betas=(0.9, 0.999), eps=1e-08, weight_decay=0.01)
+            scheduler = getattr(schedulers, scheduler_type)                
+            if scheduler_type == 'TriangularSchedule':
+                self.scheduler = scheduler(optimizer=self.optimizer, steps_per_epoch=len(self.train_loader), epochs_per_level=epochs_per_level)
+                
         else:
             self.optimizer = optim.SGD(
                     self.model.parameters(), lr=lr, momentum=momentum, weight_decay=weight_decay
@@ -390,4 +397,4 @@ if __name__ == "__main__":
             nprocs=world_size,
             join=True,
         )
-        print(f"Training level {level} complete, moving on to {level+1}")
+        print(f"Training level {level} complete, moving on to {level+1}")n

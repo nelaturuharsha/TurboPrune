@@ -178,3 +178,9 @@ Thesis/
 dump_ckpt.py
 test_ckpt.py
 heatmap/
+job_folder/
+wandb/
+cifar10_*
+cifar10*
+budgeted*
+sclpt_imagenet

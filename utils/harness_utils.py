@@ -12,6 +12,8 @@ import yaml
 from fastargs.decorators import param
 from typing import Any, Dict, Optional, Tuple 
 
+from fastargs import get_current_config
+
 
 def reset_weights(
     expt_dir: str, model: torch.nn.Module, training_type: str
@@ -63,7 +65,7 @@ def reset_optimizer(
     """
     if training_type in {"imp", "lrr"}:
         optimizer.load_state_dict(
-            torch.load(os.path.join(expt_dir, "artifacts", "optimizer_init.pt"))
+            torch.load(os.path.join('/home/c02hane/CISPA-projects/neuron_pruning-2024/TurboPrune/Thesis/mag_pruning/150epochs/experiment_20240719_143121_ed731d', "artifacts", "optimizer_init.pt"))
         )
     elif training_type == "wr":
         optimizer.load_state_dict(
@@ -158,9 +160,18 @@ def print_sparsity_info(model: torch.nn.Module, verbose: bool = True) -> float:
 
 @param("experiment_params.base_dir")
 @param("experiment_params.resume_level")
+@param("cyclic_training.num_cycles")
+@param('cyclic_training.total_epoch_budget')
+@param("cyclic_training.strategy")
+@param("experiment_params.epochs_per_level")
+@param("prune_params.prune_rate")
+@param("prune_params.prune_method")
+@param("prune_params.er_method")
+@param("prune_params.er_init")
 @param("experiment_params.resume_expt_name")
 def gen_expt_dir(
-    base_dir: str, resume_level: int, resume_expt_name: Optional[str] = None
+    base_dir: str, resume_level: int, num_cycles, total_epoch_budget, strategy, epochs_per_level, prune_rate, prune_method, er_method, er_init, \
+      resume_expt_name: Optional[str] = None
 ) -> str:
     """Create a new experiment directory and all the necessary subdirectories.
        If provided, instead of creating a new directory -- set the directory to the one provided.
@@ -173,13 +184,24 @@ def gen_expt_dir(
     Returns:
         str: Path to the experiment directory.
     """
+    config = get_current_config()
+    prefix = None
+
+    #if prune_method != 'just dont' and er_method == 'just dont':
+    #    prefix = f'{prune_method}_rate_{prune_rate}_budget_{total_epoch_budget}_cycles_{num_cycles}_strat_{strategy}'
+    #elif prune_method == 'just dont' and er_method != 'just dont':
+    #    prefix = f'{er_method}_sparsity_{1-er_init}_budget_{total_epoch_budget}_cycles_{num_cycles}_strat_{strategy}'
+    #else:
+    #    raise ValueError('There is an issue, you either need to specify prune_method or er_method.')
+    prefix = f"{er_method}_{1-er_init}_{prune_method}_{prune_rate}_budget_{total_epoch_budget}_cycles_{num_cycles}_strat_{strategy}_seed_{config['experiment_params.seed']}"
+    
     if resume_level != 0 and resume_expt_name:
         expt_dir = os.path.join(base_dir, resume_expt_name)
         print(f"Resuming from Level -- {resume_level}")
     elif resume_level == 0 and resume_expt_name is None:
         current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
         unique_id = uuid.uuid4().hex[:6]
-        unique_name = f"experiment_{current_time}_{unique_id}"
+        unique_name = f"{prefix}_{current_time}_{unique_id}"
         expt_dir = os.path.join(base_dir, unique_name)
         print(f"Creating this Folder {expt_dir}:)")
     else:
@@ -194,7 +216,7 @@ def gen_expt_dir(
         os.makedirs(f"{expt_dir}/metrics/epochwise_metrics")
         os.makedirs(f"{expt_dir}/artifacts/")
 
-    return expt_dir
+    return prefix, expt_dir
 
 
 @param("experiment_params.seed")
@@ -255,3 +277,157 @@ def save_config(expt_dir: str, config: Any) -> None:
 
     with open(os.path.join(expt_dir, "expt_config.yaml"), "w") as file:
         yaml.dump(nested_dict, file, default_flow_style=False)
+
+
+@param('cyclic_training.min_epochs')
+@param('cyclic_training.max_epochs')
+@param('cyclic_training.num_cycles')
+@param('cyclic_training.strategy')
+def generate_epoch_schedule(min_epochs, max_epochs, num_cycles, strategy):
+    """
+    Generates a schedule of epochs per cycle based on the given strategy.
+    
+    Parameters:
+    - min_epochs (int): Minimum number of epochs.
+    - max_epochs (int): Maximum number of epochs.
+    - num_cycles (int): Number of cycles.
+    - strategy (str): Strategy for epoch scheduling. Options are:
+                      'linear_decrease', 'linear_increase', 'exponential_decrease',
+                      'exponential_increase', 'cyclic_peak', 'alternating', 'plateau'.
+                      
+    Returns:
+    - List[int]: A list of epochs for each cycle.
+    """
+    
+    if strategy == 'linear_decrease':
+        # Linearly decreasing epochs
+        step = (max_epochs - min_epochs) / (num_cycles - 1)
+        epochs = [int(max_epochs - step * i) for i in range(num_cycles)]
+
+    elif strategy == 'linear_increase':
+        # Linearly increasing epochs
+        step = (max_epochs - min_epochs) / (num_cycles - 1)
+        epochs = [int(min_epochs + step * i) for i in range(num_cycles)]
+
+    elif strategy == 'exponential_decrease':
+        # Exponentially decreasing epochs
+        factor = (min_epochs / max_epochs) ** (1 / (num_cycles - 1))
+        epochs = [int(max_epochs * (factor ** i)) for i in range(num_cycles)]
+
+    elif strategy == 'exponential_increase':
+        # Exponentially increasing epochs
+        factor = (max_epochs / min_epochs) ** (1 / (num_cycles - 1))
+        epochs = [int(min_epochs * (factor ** i)) for i in range(num_cycles)]
+
+    elif strategy == 'cyclic_peak':
+        # Cyclic pattern with peak epochs in the middle
+        mid_point = num_cycles // 2
+        increase_step = (max_epochs - min_epochs) / mid_point
+        decrease_step = (max_epochs - min_epochs) / (num_cycles - mid_point - 1)
+        epochs = [int(min_epochs + increase_step * i) for i in range(mid_point)]
+        epochs += [int(max_epochs - decrease_step * (i - mid_point)) for i in range(mid_point, num_cycles)]
+
+    elif strategy == 'alternating':
+        high = max_epochs
+        low = min_epochs
+        epochs = [high if i % 2 == 0 else low for i in range(num_cycles)]
+
+    elif strategy == 'plateau':
+        increase_cycles = num_cycles // 2
+        plateau_cycles = num_cycles - increase_cycles
+        increase_step = (max_epochs - min_epochs) / increase_cycles
+        epochs = [int(min_epochs + increase_step * i) for i in range(increase_cycles)]
+        epochs += [max_epochs for _ in range(plateau_cycles)]
+
+    else:
+        epochs = [min_epochs for _ in range(num_cycles)]
+
+    return epochs
+
+@param('cyclic_training.total_epoch_budget')
+@param('cyclic_training.num_cycles')
+@param('cyclic_training.strategy')
+def generate_budgeted_schedule(total_epoch_budget, num_cycles, strategy):
+    """
+    Generates a schedule of epochs per cycle based on the given strategy and total epoch budget.
+    
+    Parameters:
+    - total_epoch_budget (int): Total number of epochs to be distributed across cycles.
+    - num_cycles (int): Number of cycles.
+    - strategy (str): Strategy for epoch scheduling. Options are:
+                      'linear_decrease', 'linear_increase', 'exponential_decrease',
+                      'exponential_increase', 'cyclic_peak', 'alternating', 'plateau'.
+                      
+    Returns:
+    - List[int]: A list of epochs for each cycle.
+    """
+    
+    if strategy == 'linear_decrease':
+        # Linearly decreasing epochs
+        step = total_epoch_budget / (num_cycles * (num_cycles + 1) / 2)
+        epochs = [int(step * (num_cycles - i)) for i in range(num_cycles)]
+
+    elif strategy == 'linear_increase':
+        # Linearly increasing epochs
+        step = total_epoch_budget / (num_cycles * (num_cycles + 1) / 2)
+        epochs = [int(step * (i + 1)) for i in range(num_cycles)]
+
+    elif strategy == 'exponential_decrease':
+        # Exponentially decreasing epochs
+        factor = 0.5 ** (1 / (num_cycles - 1))
+        total_factor = sum(factor ** i for i in range(num_cycles))
+        epochs = [int(total_epoch_budget * (factor ** i) / total_factor) for i in range(num_cycles)]
+
+    elif strategy == 'exponential_increase':
+        # Exponentially increasing epochs
+        factor = 2 ** (1 / (num_cycles - 1))
+        total_factor = sum(factor ** i for i in range(num_cycles))
+        epochs = [int(total_epoch_budget * (factor ** i) / total_factor) for i in range(num_cycles)]
+
+    elif strategy == 'cyclic_peak':
+        # Cyclic pattern with peak epochs in the middle
+        mid_point = num_cycles // 2
+        increase_step = total_epoch_budget / (mid_point * (mid_point + 1) / 2)
+        decrease_step = total_epoch_budget / ((num_cycles - mid_point) * (num_cycles - mid_point + 1) / 2)
+        epochs = [int(increase_step * (i + 1)) for i in range(mid_point)]
+        epochs += [int(decrease_step * (num_cycles - i)) for i in range(mid_point, num_cycles)]
+
+    elif strategy == 'alternating':
+        # Alternating high and low epochs
+        high = total_epoch_budget // (num_cycles // 2 + num_cycles % 2)
+        low = total_epoch_budget // (2 * (num_cycles // 2 + num_cycles % 2))
+        epochs = [high if i % 2 == 0 else low for i in range(num_cycles)]
+
+    elif strategy == 'plateau':
+        increase_cycles = num_cycles // 2
+        plateau_cycles = num_cycles - increase_cycles
+        increase_step = total_epoch_budget / (increase_cycles * (increase_cycles + 1) / 2)
+        epochs = [int(increase_step * (i + 1)) for i in range(increase_cycles)]
+        epochs += [total_epoch_budget // num_cycles for _ in range(plateau_cycles)]
+
+    else:
+        epochs = [total_epoch_budget // num_cycles for _ in range(num_cycles)]
+
+    # Ensure the total does not exceed the total_epoch_budget
+    current_total = sum(epochs)
+    if current_total > total_epoch_budget:
+        # Proportional scaling to fit within the budget
+        scaling_factor = total_epoch_budget / current_total
+        epochs = [int(epoch * scaling_factor) for epoch in epochs]
+
+        # Adjust to compensate for rounding errors
+        current_total = sum(epochs)
+        excess = current_total - total_epoch_budget
+        
+        if excess > 0:
+            reduction_per_epoch = excess // len(epochs)
+            remainder = excess % len(epochs)
+            
+            epochs = [epoch - reduction_per_epoch for epoch in epochs]
+            
+            for i in range(remainder):
+                epochs[i] -= 1
+    
+    print(sum(epochs))
+ 
+    return epochs

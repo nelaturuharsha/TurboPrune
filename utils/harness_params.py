@@ -32,7 +32,6 @@ def get_current_params() -> None:
             ),
             default='mag',
         ),
-        num_levels=Param(int, "number of pruning levels", required=True),
     )
 
     Section("experiment_params", "parameters to train model").params(
@@ -44,7 +43,6 @@ def get_current_params() -> None:
             int, "level to resume from -- 0 if starting afresh", default=0
         ),
         resume_expt_name=Param(str, "resume path"),
-        num_cycles=Param(int, "number of cyclic repetition of the LR schedule in one cycle", default=1),
         training_precision = Param(And(str, OneOf(['bfloat16', 'float32'])), default='float32')
     )
 
@@ -80,6 +78,12 @@ def get_current_params() -> None:
         port=Param(int, "default port", default=12350),
     )
 
-
-
-#
+    Section('cyclic_training', 'parameters for cyclic training').params(
+        total_epoch_budget=Param(int, 'maximum number of epochs the model is trained for across the entire training run', required=True),
+        num_cycles=Param(int, "number of cycles used for cyclic training", default=1),
+        strategy=Param(And(str, OneOf(['linear_increase', 'linear_decrease', 'exponential_decrease', 
+                                      'exponential_increase', 'cyclic_peak', 'alternating', 'plateau', 'constant'])), default='constant'),
+        )
+    Section('wandb_params', 'parameters for wandb').params(
+        project_name=Param(str, 'project', required=True)
+    )
