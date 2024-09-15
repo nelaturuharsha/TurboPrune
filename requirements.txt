@@ -8,3 +8,4 @@ torchvision
 airbench
 schedulefree
 pyhessian
+wandb

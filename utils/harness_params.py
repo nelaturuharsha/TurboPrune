@@ -21,7 +21,7 @@ def get_current_params() -> None:
 
     Section("prune_params", "pruning configuration").params(
         prune_rate=Param(float, "percentage of parameters to remove", default=0.2),
-        er_init=Param(float, "sparse init percentage/target", default=0.2),
+        er_init=Param(float, "sparse init percentage/target", default=0.0),
         er_method=Param(
             And(str, OneOf(["er_erk", "er_balanced", "synflow", "snip", "just dont"])),
             default="just dont",
@@ -32,12 +32,12 @@ def get_current_params() -> None:
             ),
             default='mag',
         ),
+        target_sparsity=Param(float, 'target sparsity of the entire pruning cycle')
     )
 
     Section("experiment_params", "parameters to train model").params(
         seed=Param(int, "seed", default=0),
         base_dir=Param(str, "base directory", required=True, default="./experiments"),
-        epochs_per_level=Param(int, "number of epochs per level", required=True),
         training_type=Param(And(str, OneOf(["imp", "wr", "lrr"])), required=True),
         resume_level=Param(
             int, "level to resume from -- 0 if starting afresh", default=0

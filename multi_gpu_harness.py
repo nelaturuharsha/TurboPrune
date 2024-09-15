@@ -5,39 +5,31 @@ import pandas as pd
 from argparse import ArgumentParser
 from prettytable import PrettyTable
 import tqdm
-import itertools
+from typing import Tuple
 
 ## torch
 import torch
 import torch.nn as nn
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
 from torch import optim
+import torch.multiprocessing as mp
 from torch.cuda.amp import autocast
 
 ## file-based imports
 import utils.schedulers as schedulers
 import utils.pruning_utils as pruning_utils
 from utils.harness_utils import *
-from utils.metric_utils import *
+from utils.dataset import CIFARLoader, imagenet
 
 ## fastargs
 from fastargs import get_current_config
 from fastargs.decorators import param
-
-from utils.dataset import imagenet
+import schedulefree
 
 import wandb
-wandb.require("core")
 
-import schedulefree
-from typing import List, Tuple
-
-IMAGENET_MEAN = np.array([0.485, 0.456, 0.406]) * 255
-IMAGENET_STD = np.array([0.229, 0.224, 0.225]) * 255
-DEFAULT_CROP_RATIO = 224 / 256
-
-from utils.airbench_loader import CifarLoader
-
-torch._dynamo.config.guard_nn_modules=True
+wandb.login(key='9a942da6eaf97ac7a754c2b1c1a3c0436f0d0df2')
 
 class Harness:
     """Harness class to handle training and evaluation.
@@ -45,28 +37,39 @@ class Harness:
     Args:
         gpu_id (int): current rank of the process while training using DDP.
         expt_dir (str): Experiment directory to save artifacts/checkpoints/metrics to.
-        model (Optional[nn.Module], optional): The model to train.
+        model (Optional[nn.Module], optional): The model to trai.
     """
 
-    def __init__(self, gpu_id: int, expt_dir: Tuple[str, str], model: nn.Module) -> None:
+    def __init__(self, gpu_id: int, expt_dir: str, model: nn.Module) -> None:
         self.config = get_current_config()
         self.gpu_id = gpu_id
         self.this_device = f"cuda:{self.gpu_id}"
         self.criterion = nn.CrossEntropyLoss()
 
         if "CIFAR" not in self.config["dataset.dataset_name"]:
-            self.loaders = imagenet(distributed=False, this_device=self.this_device)
-            self.train_loader = self.loaders.train_loader
-            self.test_loader = self.loaders.test_loader
+            self.loaders = imagenet(this_device=self.this_device, distributed=True)
         else:
-            self.train_loader = CifarLoader(path='./cifar10', batch_size=512, train=True, aug={'flip' : True, 'translate' : 2}, altflip=True, dataset=self.config['dataset.dataset_name'])
-            self.test_loader = CifarLoader(path='./cifar10', batch_size=512, train=False, dataset=self.config['dataset.dataset_name'])
+            self.loaders = CIFARLoader(distributed=True)
 
-        self.model = model.to(self.this_device)
-        #self.model = torch.compile(self.model, mode='reduce-overhead')
+        self.train_loader = self.loaders.train_loader
+        self.test_loader = self.loaders.test_loader
+
+        model = model.to(self.this_device)
+        self.model = DDP(model, device_ids=[self.gpu_id])
         self.prefix, self.expt_dir = expt_dir
 
+        self.precision, self.use_amp = self.get_dtype_amp()
+
         self.epoch_counter = 0
+
+    @param('experiment_params.training_precision')
+    def get_dtype_amp(self, training_precision):
+        dtype_map = {
+            'bfloat16': (torch.bfloat16, True),
+            'float16': (torch.float16, True),
+            'float32': (torch.float32, False)
+        }
+        return dtype_map.get(training_precision, (torch.float32, False))
     
     @param("optimizer.lr")
     @param("optimizer.momentum")
@@ -114,7 +117,6 @@ class Harness:
                                                               max_lr=lr,
                                                               epochs=epochs_per_level,
                                                               steps_per_epoch=len(self.train_loader))
-                
 
     def train_one_epoch(self, epoch: int) -> Tuple[float, float]:
         """Train the model for one epoch.
@@ -123,11 +125,11 @@ class Harness:
             epoch (int): Current epoch.
         Returns:
             (float, float): Training loss and accuracy.
-        """        
+        """
+        if "CIFAR" in self.config["dataset.dataset_name"]:
+            self.loaders.train_sampler.set_epoch(epoch)
         model = self.model
         model.train()
-        if self.scheduler is None:
-            self.optimizer.train()
         train_loss = 0
         correct = 0
         total = 0
@@ -140,9 +142,10 @@ class Harness:
                 )
 
             self.optimizer.zero_grad()
-            with autocast(dtype=torch.bfloat16, device_type='cuda'):
-                outputs = model(inputs)
+            with autocast(dtype=self.precision, enabled = self.use_amp):
+                outputs = model(inputs.contiguous())
                 loss = self.criterion(outputs, targets)
+            loss = self.criterion(outputs, targets)
             loss.backward()
             self.optimizer.step()
 
@@ -150,14 +153,13 @@ class Harness:
             _, predicted = outputs.max(1)
             total += targets.size(0)
             correct += predicted.eq(targets).sum().item()
-
+            
             if (self.scheduler is not None) and (self.config['optimizer.scheduler_type'] != 'MultiStepLRWarmup'):
                 #print('Running Trapezoidal/Triangular/OneCycle')
                 self.scheduler.step()
         if self.config["optimizer.scheduler_type"] == 'MultiStepLRWarmup':
             #print('Step LR')
             self.scheduler.step()
-        
         train_loss /= len(self.train_loader)
         accuracy = 100.0 * (correct / total)
         return train_loss, accuracy
@@ -169,14 +171,6 @@ class Harness:
             (float, float): Test loss and accuracy.
         """
         model = self.model
-
-        if self.scheduler is None:
-            model.train()
-            self.optimizer.eval()
-            for batch in itertools.islice(self.train_loader, 50): 
-                with autocast(dtype=torch.bfloat16, device_type='cuda'):
-                    model(batch[0].cuda())
-
         model.eval()
         test_loss = 0
         correct = 0
@@ -189,8 +183,8 @@ class Harness:
                     inputs, targets = inputs.to(self.this_device), targets.to(
                         self.this_device
                     )
-                with autocast(dtype=torch.bfloat16, device_type='cuda'):
-                    outputs = model(inputs)
+                with autocast(dtype=self.precision, enabled = self.use_amp):
+                    outputs = model(inputs.contiguous())
                     loss = self.criterion(outputs, targets)
 
                 test_loss += loss.item()
@@ -202,7 +196,7 @@ class Harness:
         accuracy = 100.0 * correct / total
 
         return test_loss, accuracy
-
+    
     @param("experiment_params.training_type")
     @param("cyclic_training.num_cycles")
     def train_one_level(self, training_type: str, num_cycles: int, level: int, single_cycle_length = None) -> None:
@@ -247,11 +241,11 @@ class Harness:
 
     def _save_rewind_checkpoint(self, level, training_type, epoch):
         if level == 0 and training_type == "wr" and epoch == 10:
-            for name, obj in [("model", self.model), ("optimizer", self.optimizer)]:
+            for name, obj in [("model", self.model.module), ("optimizer", self.optimizer)]:
                 torch.save(obj.state_dict(), os.path.join(self.expt_dir, f"{name}_rewind.pt"))
 
     def _save_cycle_data(self, cycle, metrics):
-        torch.save(self.model.state_dict(), os.path.join(self.expt_dir, "checkpoints", f"model_cycle_{cycle}.pt"))
+        torch.save(self.model.module.state_dict(), os.path.join(self.expt_dir, "checkpoints", f"model_cycle_{cycle}.pt"))
         pd.DataFrame(metrics).to_csv(os.path.join(self.expt_dir, "metrics", f"cycle_{cycle}_metrics.csv"))
         self._update_summary(cycle, metrics)
 
@@ -277,7 +271,25 @@ class Harness:
             "max_test_acc": round(max(metrics["test_acc"]), 4)
         })
 
-def main(model: nn.Module, level: int, expt_dir: str) -> None:
+
+@param("dist_params.address")
+@param("dist_params.port")
+def setup_distributed(address: str, port: int, gpu_id: int) -> None:
+    """Setup distributed training environment.
+
+    Args:
+        address (str): Master address for distributed training.
+        port (int): Master port for distributed training.
+        gpu_id (int): current rank/gpu.
+    """
+    os.environ["MASTER_ADDR"] = address
+    os.environ["MASTER_PORT"] = str(port)
+    world_size = torch.cuda.device_count()
+    dist.init_process_group("nccl", rank=gpu_id, world_size=world_size)
+    torch.cuda.set_device(gpu_id)
+
+
+def main(rank: int, model: nn.Module, level: int, expt_dir: str, run_id, single_cycle_length: int = None) -> None:
     """Main function for distributed training.
 
     Args:
@@ -293,18 +305,27 @@ def main(model: nn.Module, level: int, expt_dir: str) -> None:
     config.validate(mode="stderr")
     set_seed()
 
-    harness = Harness(model=model, expt_dir=expt_dir, gpu_id=0)
+    setup_distributed(gpu_id=rank)
 
-    if (level == 0):
+
+    if (rank == 0):
+        wandb.init(id=run_id, resume='allow')
+    harness = Harness(model=model, expt_dir=expt_dir, gpu_id=rank)
+
+    if (level == 0) and (rank == 0):
         torch.save(
-            harness.model.state_dict(),
+            harness.model.module.state_dict(),
             os.path.join(expt_dir[1], "checkpoints", "model_init.pt"),
         )
 
-    harness.train_one_level(level=level)
+    harness.train_one_level(level=level, single_cycle_length=single_cycle_length)
 
-    ckpt = os.path.join(expt_dir[1], "checkpoints", f"model_level_{level}.pt")
-    torch.save(harness.model.state_dict(), ckpt)
+    if rank == 0:
+        ckpt = os.path.join(expt_dir[1], "checkpoints", f"model_level_{level}.pt")
+        torch.save(harness.model.module.state_dict(), ckpt)
+
+    dist.destroy_process_group()
+
 
 def initialize_config():
     config = get_current_config()
@@ -317,8 +338,7 @@ def initialize_config():
 
 if __name__ == "__main__":
     config = initialize_config()
-    wandb.login(key='9a942da6eaf97ac7a754c2b1c1a3c0436f0d0df2')
-    wandb.init(project=config['wandb_params.project_name'])
+    
     world_size = torch.cuda.device_count()
     print(f"Training on {world_size} GPUs")
     perturbation_table = PrettyTable()
@@ -327,25 +347,50 @@ if __name__ == "__main__":
     prune_harness = pruning_utils.PruningStuff()
 
     #### STEP ONE: Prune at init #### 
-    prune_harness.prune_at_initialization()
     prefix, expt_dir = gen_expt_dir()
 
     packaged = (prefix, expt_dir)
     save_config(expt_dir=expt_dir, config=config)
     
     #### STEP TWO: Cyclic Training ####
-    print_sparsity_info(prune_harness.model, verbose=False)
-    main(model = prune_harness.model, level=0, expt_dir=packaged)
+    print_sparsity_info(prune_harness.model, verbose=False) 
+    is_iterative = (config['prune_params.er_method'] == 'just dont') and (config['prune_params.prune_method'] != 'just dont')
+    
+    if is_iterative:
+        densities = generate_densities(current_sparsity=print_sparsity_info(prune_harness.model, verbose=False))
+        print(densities)
+    else:
+        densities = [config['prune_params.er_init']]
+    
+    wandb.init()
+    run_id = wandb.run.id
 
-    #### STEP THREE: Magnitude Pruning to Target ####
-    prune_harness.level_pruner(density=float(config['prune_params.prune_rate']))
-
-    level = 100
-
-    harness = Harness(model=prune_harness.model, expt_dir=packaged, gpu_id=0)
-
-    harness.train_one_level(num_cycles=1, level=level, single_cycle_length=90)
-    ckpt = os.path.join(expt_dir, "checkpoints", f"model_level_{level}.pt")
-    torch.save(harness.model.state_dict(), ckpt)
-
+    for level in range(len(densities)):
+        print_sparsity_info(prune_harness.model, verbose=False)
+        print(f'Target Density is: {densities[level]}')
+        if is_iterative:
+            if level != 0:
+                print(f"Pruning Model at level: {level}")
+                prune_harness.load_from_ckpt(
+                    os.path.join(expt_dir, "checkpoints", f"model_level_{level-1}.pt")
+                )
+                prune_harness.level_pruner(density=densities[level])
+                prune_harness.model = reset_weights(
+                    expt_dir=expt_dir,
+                    model=prune_harness.model,
+                    training_type=config["experiment_params.training_type"],
+                )
+                print_sparsity_info(prune_harness.model, verbose=False)
+        else:
+            print('we out here pruning at init')
+            prune_harness.prune_at_initialization(er_init=densities[level])
+            print_sparsity_info(prune_harness.model, verbose=False)
+        mp.spawn(
+            main,
+            args=(prune_harness.model, level, packaged, run_id),
+            nprocs=world_size,
+            join=True,
+        )
+        
+        print(f"Training level {level} complete, moving on to {level+1}")
     wandb.finish()

@@ -29,6 +29,7 @@ def reset_weights(
         torch.nn.Module: The model with reset weights.
     """
     if training_type == "imp":
+        print('Rewinding to init')
         original_dict = torch.load(
             os.path.join(expt_dir, "checkpoints", "model_init.pt")
         )
@@ -65,7 +66,7 @@ def reset_optimizer(
     """
     if training_type in {"imp", "lrr"}:
         optimizer.load_state_dict(
-            torch.load(os.path.join('/home/c02hane/CISPA-projects/neuron_pruning-2024/TurboPrune/Thesis/mag_pruning/150epochs/experiment_20240719_143121_ed731d', "artifacts", "optimizer_init.pt"))
+            torch.load(os.path.join(expt_dir, "artifacts", "optimizer_init.pt"))
         )
     elif training_type == "wr":
         optimizer.load_state_dict(
@@ -160,18 +161,9 @@ def print_sparsity_info(model: torch.nn.Module, verbose: bool = True) -> float:
 
 @param("experiment_params.base_dir")
 @param("experiment_params.resume_level")
-@param("cyclic_training.num_cycles")
-@param('cyclic_training.total_epoch_budget')
-@param("cyclic_training.strategy")
-@param("experiment_params.epochs_per_level")
-@param("prune_params.prune_rate")
-@param("prune_params.prune_method")
-@param("prune_params.er_method")
-@param("prune_params.er_init")
 @param("experiment_params.resume_expt_name")
 def gen_expt_dir(
-    base_dir: str, resume_level: int, num_cycles, total_epoch_budget, strategy, epochs_per_level, prune_rate, prune_method, er_method, er_init, \
-      resume_expt_name: Optional[str] = None
+    base_dir: str, resume_level: int, resume_expt_name: Optional[str] = None
 ) -> str:
     """Create a new experiment directory and all the necessary subdirectories.
        If provided, instead of creating a new directory -- set the directory to the one provided.
@@ -186,14 +178,15 @@ def gen_expt_dir(
     """
     config = get_current_config()
     prefix = None
+    prune_method = config['prune_params.prune_method']
+    er_method = config['prune_params.er_method']
 
-    #if prune_method != 'just dont' and er_method == 'just dont':
-    #    prefix = f'{prune_method}_rate_{prune_rate}_budget_{total_epoch_budget}_cycles_{num_cycles}_strat_{strategy}'
-    #elif prune_method == 'just dont' and er_method != 'just dont':
-    #    prefix = f'{er_method}_sparsity_{1-er_init}_budget_{total_epoch_budget}_cycles_{num_cycles}_strat_{strategy}'
-    #else:
-    #    raise ValueError('There is an issue, you either need to specify prune_method or er_method.')
-    prefix = f"{er_method}_{1-er_init}_{prune_method}_{prune_rate}_budget_{total_epoch_budget}_cycles_{num_cycles}_strat_{strategy}_seed_{config['experiment_params.seed']}"
+    if prune_method != 'just dont' and er_method == 'just dont':
+        prefix = f"seed_{config['experiment_params.seed']}_{prune_method}_rate_{config['prune_params.prune_rate']}_budget_{config['cyclic_training.total_epoch_budget']}_cycles_{config['cyclic_training.num_cycles']}_strat_{config['cyclic_training.strategy']}"
+    elif prune_method == 'just dont' and er_method != 'just dont':
+        prefix =  f"seed_{config['experiment_params.seed']}_{er_method}_rate_{1-config['prune_params.er_init']}_budget_{config['cyclic_training.total_epoch_budget']}_cycles_{config['cyclic_training.num_cycles']}_strat_{config['cyclic_training.strategy']}"
+    else:
+        prefix = f"seed_{config['experiment_params.seed']}_{prune_method}_{config['prune_params.prune_rate']}_{er_method}_rate_{1-config['prune_params.er_init']}_budget_{config['cyclic_training.total_epoch_budget']}_cycles_{config['cyclic_training.num_cycles']}_strat_{config['cyclic_training.strategy']}"
     
     if resume_level != 0 and resume_expt_name:
         expt_dir = os.path.join(base_dir, resume_expt_name)
@@ -241,26 +234,29 @@ def set_seed(seed: int, is_deterministic: bool = False) -> None:
     os.environ["PYTHONHASHSEED"] = str(seed)
     print(f"Random seed set as {seed}")
 
-
 @param("prune_params.prune_method")
-@param("prune_params.num_levels")
+@param("prune_params.target_sparsity")
 @param("prune_params.prune_rate")
-def generate_densities(prune_method: str, num_levels: int, prune_rate: float
-) -> list[float]:
-    """Generate a list of densities for pruning. The density is calculated as (1 - prune_rate) ^ i where i is the sparsity level.
-       For example, if prune_rate = 0.2 and the num_levels = 5, the densities will be [1.0, 0.8, 0.64, 0.512, 0.4096].
+def generate_densities(prune_method: str, target_sparsity: float, prune_rate: float, current_sparsity: float) -> list[float]:
+    """Generate a list of densities for pruning. The density is calculated as
+       (1 - prune_rate) ^ i multiplied by current_sparsity until target_sparsity is reached.
     Args:
         prune_method (str): Method of pruning.
-        num_levels (int): Number of pruning levels.
+        target_sparsity (float): The target sparsity to reach.
+        current_sparsity (float): The current density (1 - current_sparsity).
         prune_rate (float): Rate of pruning.
-
     Returns:
-        list[float]: List of densities for each level.
+        list[float]: List of densities until target sparsity is reached.
     """
-    
-    densities = [(1 - prune_rate) ** i for i in range(num_levels)]
+    densities = []
+    current_density = 1 - current_sparsity
+    target_density = 1 - target_sparsity
+    while current_density > target_density:
+        densities.append(current_density)
+        current_density *= (1 - prune_rate)
+    if current_density <= target_density:
+        densities.append(current_density)
     return densities
-
 
 def save_config(expt_dir: str, config: Any) -> None:
     """Save the experiment configuration to a YAML file in the experiment directory.

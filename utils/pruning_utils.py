@@ -177,6 +177,7 @@ class PruningStuff:
         Args:
             path (str): Path to the checkpoint.
         """
+        print(f'Loading from {path}')
         self.model.load_state_dict(torch.load(path))
 
 

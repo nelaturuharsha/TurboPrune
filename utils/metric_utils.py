@@ -11,7 +11,7 @@ from utils.pruning_utils import PruningStuff
 from fastargs import get_current_config
 from utils.harness_utils import *
 
-import airbench
+from utils.airbench_loader import CifarLoader
 from pyhessian import hessian
 
 get_current_config()
@@ -23,7 +23,7 @@ def test(model):
         (float, float): Test loss and accuracy.
     """
     this_device = 'cuda'
-    test_loader = airbench.CifarLoader(path='./cifar10', batch_size=512, train=False)
+    test_loader = CifarLoader(path='./cifar10', batch_size=512, train=False)
 
     model.to(this_device)
     criterion = nn.CrossEntropyLoss()
@@ -192,7 +192,7 @@ class LinearModeConnectivity:
                      'train_acc' : [],
                      'test_acc' : []
                      }
-        
+        print(f'Computing Linear mode for: {level1} and {level2}')        
         m1_params = self.gen_masked_dict(level=level1)
         m2_params = self.gen_masked_dict(level=level2)
 
@@ -215,7 +215,7 @@ class LinearModeConnectivity:
 
         save_path = os.path.join(self.save_path, f'linear_mode_{level1}_{level2}.csv')
         pd.DataFrame(data_dict).to_csv(save_path, index=False)
-
+        
 def hessian_trace(train_loader, model):
     train_loader = airbench.CifarLoader(path='./cifar10', batch_size=1000, train=True, aug={'flip' : True, 'translate' : 2}, altflip=True, drop_last=True)
 

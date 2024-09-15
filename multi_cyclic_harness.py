@@ -5,37 +5,29 @@ import pandas as pd
 from argparse import ArgumentParser
 from prettytable import PrettyTable
 import tqdm
-import itertools
+from typing import Tuple
 
 ## torch
 import torch
 import torch.nn as nn
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
 from torch import optim
+import torch.multiprocessing as mp
 from torch.cuda.amp import autocast
 
 ## file-based imports
 import utils.schedulers as schedulers
 import utils.pruning_utils as pruning_utils
 from utils.harness_utils import *
-from utils.metric_utils import *
-from utils.dataset import imagenet
+from utils.dataset import CIFARLoader, imagenet
 
 ## fastargs
 from fastargs import get_current_config
 from fastargs.decorators import param
+import schedulefree
 
 import wandb
-
-import schedulefree
-from typing import List, Tuple
-
-IMAGENET_MEAN = np.array([0.485, 0.456, 0.406]) * 255
-IMAGENET_STD = np.array([0.229, 0.224, 0.225]) * 255
-DEFAULT_CROP_RATIO = 224 / 256
-
-from utils.airbench_loader import CifarLoader
-
-torch._dynamo.config.guard_nn_modules=True
 
 class Harness:
     """Harness class to handle training and evaluation.
@@ -43,28 +35,39 @@ class Harness:
     Args:
         gpu_id (int): current rank of the process while training using DDP.
         expt_dir (str): Experiment directory to save artifacts/checkpoints/metrics to.
-        model (Optional[nn.Module], optional): The model to train.
+        model (Optional[nn.Module], optional): The model to trai.
     """
 
-    def __init__(self, gpu_id: int, expt_dir: Tuple[str, str], model: nn.Module) -> None:
+    def __init__(self, gpu_id: int, expt_dir: str, model: nn.Module) -> None:
         self.config = get_current_config()
         self.gpu_id = gpu_id
         self.this_device = f"cuda:{self.gpu_id}"
         self.criterion = nn.CrossEntropyLoss()
 
         if "CIFAR" not in self.config["dataset.dataset_name"]:
-            self.loaders = imagenet(distributed=False, this_device=self.this_device)
-            self.train_loader = self.loaders.train_loader
-            self.test_loader = self.loaders.test_loader
+            self.loaders = imagenet(this_device=self.this_device, distributed=True)
         else:
-            self.train_loader = CifarLoader(path='./cifar10', batch_size=512, train=True, aug={'flip' : True, 'translate' : 2}, altflip=True, dataset=self.config['dataset.dataset_name'])
-            self.test_loader = CifarLoader(path='./cifar10', batch_size=512, train=False, dataset=self.config['dataset.dataset_name'])
+            self.loaders = CIFARLoader(distributed=True)
 
-        self.model = model.to(self.this_device)
-        #self.model = torch.compile(self.model, mode='reduce-overhead')
+        self.train_loader = self.loaders.train_loader
+        self.test_loader = self.loaders.test_loader
+
+        model = model.to(self.this_device)
+        self.model = DDP(model, device_ids=[self.gpu_id])
+        self.create_optimizers()
         self.prefix, self.expt_dir = expt_dir
 
+        self.precision, self.use_amp = self.get_dtype_amp()
+
         self.epoch_counter = 0
+    @param('experiment_params.training_precision')
+    def get_dtype_amp(self, training_precision):
+        dtype_map = {
+            'bfloat16': (torch.bfloat16, True),
+            'float16': (torch.float16, True),
+            'float32': (torch.float32, False)
+        }
+        return dtype_map.get(training_precision, (torch.float32, False))
     
     @param("optimizer.lr")
     @param("optimizer.momentum")
@@ -112,7 +115,6 @@ class Harness:
                                                               max_lr=lr,
                                                               epochs=epochs_per_level,
                                                               steps_per_epoch=len(self.train_loader))
-                
 
     def train_one_epoch(self, epoch: int) -> Tuple[float, float]:
         """Train the model for one epoch.
@@ -121,11 +123,11 @@ class Harness:
             epoch (int): Current epoch.
         Returns:
             (float, float): Training loss and accuracy.
-        """        
+        """
+        if "CIFAR" in self.config["dataset.dataset_name"]:
+            self.loaders.train_sampler.set_epoch(epoch)
         model = self.model
         model.train()
-        if self.scheduler is None:
-            self.optimizer.train()
         train_loss = 0
         correct = 0
         total = 0
@@ -138,9 +140,10 @@ class Harness:
                 )
 
             self.optimizer.zero_grad()
-            with autocast(dtype=torch.bfloat16, device_type='cuda'):
-                outputs = model(inputs)
+            with autocast(dtype=self.precision, enabled = self.use_amp):
+                outputs = model(inputs.contiguous())
                 loss = self.criterion(outputs, targets)
+            loss = self.criterion(outputs, targets)
             loss.backward()
             self.optimizer.step()
 
@@ -152,10 +155,10 @@ class Harness:
             if (self.scheduler is not None) and (self.config['optimizer.scheduler_type'] != 'MultiStepLRWarmup'):
                 #print('Running Trapezoidal/Triangular/OneCycle')
                 self.scheduler.step()
+            
         if self.config["optimizer.scheduler_type"] == 'MultiStepLRWarmup':
             #print('Step LR')
             self.scheduler.step()
-        
         train_loss /= len(self.train_loader)
         accuracy = 100.0 * (correct / total)
         return train_loss, accuracy
@@ -167,14 +170,6 @@ class Harness:
             (float, float): Test loss and accuracy.
         """
         model = self.model
-
-        if self.scheduler is None:
-            model.train()
-            self.optimizer.eval()
-            for batch in itertools.islice(self.train_loader, 50): 
-                with autocast(dtype=torch.bfloat16, device_type='cuda'):
-                    model(batch[0].cuda())
-
         model.eval()
         test_loss = 0
         correct = 0
@@ -187,8 +182,8 @@ class Harness:
                     inputs, targets = inputs.to(self.this_device), targets.to(
                         self.this_device
                     )
-                with autocast(dtype=torch.bfloat16, device_type='cuda'):
-                    outputs = model(inputs)
+                with autocast(dtype=self.precision, enabled = self.use_amp):
+                    outputs = model(inputs.contiguous())
                     loss = self.criterion(outputs, targets)
 
                 test_loss += loss.item()
@@ -200,130 +195,101 @@ class Harness:
         accuracy = 100.0 * correct / total
 
         return test_loss, accuracy
-
+    
+    
     @param("experiment_params.training_type")
     @param("cyclic_training.num_cycles")
-    def train_one_level(
-        self, training_type: str, num_cycles: int, level: int) -> None:
-        """Train the model for one full level. This can thought of as one full training run.
-
-        Args:
-            raining_type (str): Type of training can be {'wr', 'lrr' or 'imp}.
-            level (int): Current sparsity level.
-        """
-        new_table = PrettyTable()
-        new_table.field_names = [
-            "Cycle_Epoch",
-            "Train Loss",
-            "Test Loss",
-            "Train Acc",
-            "Test Acc",
-        ]
-        sparsity_level_df = {
-            "cycle_epoch": [],
-            "train_acc": [],
-            "test_acc": [],
-            "train_loss": [],
-            "test_loss": [],
-        }
-        data_df = {
-            "level": [],
-            "sparsity": [],
-            "max_test_acc": [],
-            "final_test_acc": [],
-            #"hessian_trace" : [],
-            "training_schedule" : [] }
-        
-
-        epoch_schedule = generate_budgeted_schedule()
-
+    def train_one_level(self, training_type: str, num_cycles: int, level: int, single_cycle_length = None) -> None:
+        metrics = {k: [] for k in ["cycle_epoch", "train_loss", "test_loss", "train_acc", "test_acc"]}
+        if single_cycle_length == None:
+            epoch_schedule = generate_budgeted_schedule()
+        else:
+            epoch_schedule = [single_cycle_length]
         print(f'Epoch Schedule: {epoch_schedule}')
+
         for cycle in range(num_cycles):
-            print('#' * 50)
-            print(f'Training Cycle {cycle} for {epoch_schedule[cycle]} epochs.')
-            print('#' * 50)
+            print(f'{"#" * 50}\nTraining Cycle {cycle} for {epoch_schedule[cycle]} epochs.\n{"#" * 50}')
             self.create_optimizers(epochs_per_level=epoch_schedule[cycle])
-            if (cycle == 0) and (level == 0):
-                torch.save(self.optimizer.state_dict(), os.path.join(expt_dir, "artifacts", "optimizer_init.pt"))
-            if level != 0:
-                self.optimizer = reset_optimizer(expt_dir=self.expt_dir, optimizer=self.optimizer, training_type=config["experiment_params.training_type"])
-            count = 0
-            print('start count 0')
+            
+            if cycle == 0 and level == 0:
+                torch.save(self.optimizer.state_dict(), os.path.join(self.expt_dir, "artifacts", "optimizer_init.pt"))
+            elif level != 0:
+                self.optimizer = reset_optimizer(self.expt_dir, self.optimizer, self.config["experiment_params.training_type"])
+
             for epoch in range(epoch_schedule[cycle]):
                 self.epoch_counter += 1
                 train_loss, train_acc = self.train_one_epoch(epoch)
                 test_loss, test_acc = self.test()
-                count += 1
-                print(count)
+                
                 if self.gpu_id == 0:
-                    new_table.add_row([f'{cycle}_{epoch}', train_loss, test_loss, train_acc, test_acc])
-                    print(new_table)
-                    sparsity_level_df[f"cycle_epoch"].append(f'{cycle}_{epoch}')
-                    sparsity_level_df["train_loss"].append(train_loss)
-                    sparsity_level_df["test_loss"].append(test_loss)
-                    sparsity_level_df["train_acc"].append(train_acc)
-                    sparsity_level_df["test_acc"].append(test_acc)
-
-                    wandb.log({
-                        "train_loss": train_loss,
-                        "test_loss": test_loss,
-                        "train_acc": train_acc,
-                        "test_acc": test_acc,
-                        "epoch": self.epoch_counter
-                    })
-
-                    if "CIFAR" in config['dataset.dataset_name']:
-                        rewind_epoch = 30
-                    else:
-                        rewind_epoch = 18
-
-                    save_matching = (
-                        (level == 0) and (training_type == "wr") and (epoch == rewind_epoch)
-                    )
-                    if save_matching and (self.gpu_id == 0):
-                        torch.save(
-                            self.model.state_dict(),
-                            os.path.join(self.expt_dir, "checkpoints", "model_rewind.pt"),
-                        )
-                        torch.save(
-                            self.optimizer.state_dict(),
-                            os.path.join(self.expt_dir, "artifacts", "optimizer_rewind.pt"),
-                        )
-
+                    self._log_metrics(cycle, epoch, train_loss, test_loss, train_acc, test_acc, metrics)
+                    self._save_rewind_checkpoint(level, training_type, epoch)
+            if self.gpu_id == 0:
+                self._save_cycle_data(cycle, metrics)
         if self.gpu_id == 0:
-            pd.DataFrame(sparsity_level_df).to_csv(
-                os.path.join(
-                    self.expt_dir,
-                    "metrics",
-                    "epochwise_metrics",
-                    f"level_{level}_metrics.csv",
-                )
-            )
-            sparsity = print_sparsity_info(self.model, verbose=False)
-            data_df["level"].append(level)
-            data_df["sparsity"].append(round(sparsity, 4))
-            data_df["final_test_acc"].append(round(test_acc, 4))
-            data_df["max_test_acc"].append(round(max(sparsity_level_df["test_acc"]), 4))
-            #data_df['hessian_trace'].append(hessian_trace(self.train_loader, model=self.model))
-            epoch_schedule_str = '-'.join(map(str, epoch_schedule))
-            data_df['training_schedule'].append(epoch_schedule_str)
-            wandb.log({
-                "sparsity": round(sparsity, 4),
-                "max_test_acc": round(max(sparsity_level_df["test_acc"]), 4)
-            })
+            self._save_level_data(level, metrics)
 
 
-            summary_path = os.path.join(self.expt_dir, "metrics", f"{self.prefix}_summary.csv")
+    def _log_metrics(self, cycle, epoch, train_loss, test_loss, train_acc, test_acc, metrics):
+        for k, v in zip(metrics.keys(), [f'{cycle}_{epoch}', train_loss, test_loss, train_acc, test_acc]):
+            metrics[k].append(v)
+        wandb.log({
+            "train_loss": train_loss, "test_loss": test_loss,
+            "train_acc": train_acc, "test_acc": test_acc,
+            "epoch": self.epoch_counter
+        })
 
-            if not os.path.exists(summary_path):
-                pd.DataFrame(data_df).to_csv(summary_path, index=False)
-            else:
-                pre_df = pd.read_csv(summary_path)
-                new_df = pd.DataFrame(data_df)
-                updated_df = pd.concat([pre_df, new_df], ignore_index=True)
-                updated_df.to_csv(summary_path, index=False)
+    def _save_rewind_checkpoint(self, level, training_type, epoch):
+        if level == 0 and training_type == "wr" and epoch == 10:
+            for name, obj in [("model", self.model), ("optimizer", self.optimizer)]:
+                torch.save(obj.state_dict(), os.path.join(self.expt_dir, f"{name}_rewind.pt"))
 
-def main(model: nn.Module, level: int, expt_dir: str) -> None:
+    def _save_cycle_data(self, cycle, metrics):
+        torch.save(self.model.state_dict(), os.path.join(self.expt_dir, "checkpoints", f"model_cycle_{cycle}.pt"))
+        pd.DataFrame(metrics).to_csv(os.path.join(self.expt_dir, "metrics", f"cycle_{cycle}_metrics.csv"))
+        self._update_summary(cycle, metrics)
+
+    def _update_summary(self, cycle, metrics):
+        summary_path = os.path.join(self.expt_dir, "metrics", f"{self.prefix}_summary.csv")
+        sparsity = print_sparsity_info(self.model, verbose=False)
+        new_data = {
+            "level": [cycle], "sparsity": [round(sparsity, 4)],
+            "final_test_acc": [round(metrics["test_acc"][-1], 4)],
+            "max_test_acc": [round(max(metrics["test_acc"]), 4)],
+            "training_schedule": ['-'.join(map(str, generate_budgeted_schedule()))]
+        }
+        if not os.path.exists(summary_path):
+            pd.DataFrame(new_data).to_csv(summary_path, index=False)
+        else:
+            pd.concat([pd.read_csv(summary_path), pd.DataFrame(new_data)], ignore_index=True).to_csv(summary_path, index=False)
+
+    def _save_level_data(self, level, metrics):
+        pd.DataFrame(metrics).to_csv(os.path.join(self.expt_dir, "metrics", "epochwise_metrics", f"level_{level}_metrics.csv"))
+        sparsity = print_sparsity_info(self.model, verbose=False)
+        wandb.log({
+            "sparsity": round(sparsity, 4),
+            "max_test_acc": round(max(metrics["test_acc"]), 4)
+        })
+
+
+@param("dist_params.address")
+@param("dist_params.port")
+def setup_distributed(address: str, port: int, gpu_id: int) -> None:
+    """Setup distributed training environment.
+
+    Args:
+        address (str): Master address for distributed training.
+        port (int): Master port for distributed training.
+        gpu_id (int): current rank/gpu.
+    """
+    os.environ["MASTER_ADDR"] = address
+    os.environ["MASTER_PORT"] = str(port)
+    world_size = torch.cuda.device_count()
+    dist.init_process_group("nccl", rank=gpu_id, world_size=world_size)
+    torch.cuda.set_device(gpu_id)
+
+
+def main(rank: int, model: nn.Module, level: int, expt_dir: str) -> None:
     """Main function for distributed training.
 
     Args:
@@ -339,7 +305,7 @@ def main(model: nn.Module, level: int, expt_dir: str) -> None:
     config.validate(mode="stderr")
     set_seed()
 
-    harness = Harness(model=model, expt_dir=expt_dir, gpu_id=0)
+    harness = Harness(model=model, expt_dir=expt_dir, gpu_id=rank)
 
     if (level == 0):
         torch.save(
@@ -349,9 +315,12 @@ def main(model: nn.Module, level: int, expt_dir: str) -> None:
 
     harness.train_one_level(level=level)
 
+    if rank == 0:
+        ckpt = os.path.join(expt_dir[1], "checkpoints", f"model_level_{level}.pt")
+        torch.save(harness.model.state_dict(), ckpt)
 
-    ckpt = os.path.join(expt_dir[1], "checkpoints", f"model_level_{level}.pt")
-    torch.save(harness.model.state_dict(), ckpt)
+    dist.destroy_process_group()
+
 
 def initialize_config():
     config = get_current_config()
@@ -363,56 +332,40 @@ def initialize_config():
     return config
 
 if __name__ == "__main__":
-    config = initialize_config()
-
-    wandb.init(project=config['wandb_params.project_name'])
     world_size = torch.cuda.device_count()
+
+    config = initialize_config()
+    wandb.login(key='9a942da6eaf97ac7a754c2b1c1a3c0436f0d0df2')
+    wandb.init(project=config['wandb_params.project_name'])
     print(f"Training on {world_size} GPUs")
-    perturbation_table = PrettyTable()
+
+    config = get_current_config()
     parser = ArgumentParser()
+    config.augment_argparse(parser)
+    config.collect_argparse_args(parser)
+
+    config.validate(mode="stderr")
+    config.summary()
 
     prune_harness = pruning_utils.PruningStuff()
 
+
     resume_level = config["experiment_params.resume_level"]
     prefix, expt_dir = gen_expt_dir()
-    print(expt_dir)
     packaged = (prefix, expt_dir)
     save_config(expt_dir=expt_dir, config=config)
 
     is_iterative = (config['prune_params.er_method'] == 'just dont') and (config['prune_params.prune_method'] != 'just dont')
-    
-    metric_path = os.path.join(expt_dir, 'metrics')
-    perturbation_dict_path = os.path.join(metric_path, 'perturbation.csv')
-    pert_stats = {'level'         : [],
-                  'pre_sparsity'  : [],
-                  'post_sparsity' : [],
-                  'pre_test_acc'  : [],
-                  'post_test_acc' : [],
-                  'perturbation'  : []}
-    
+
     if is_iterative:
         densities = generate_densities(current_sparsity=print_sparsity_info(prune_harness.model, verbose=False))
     else:
         densities = [config['prune_params.er_init']]
-    
+
     for level in range(resume_level, len(densities)):
         print_sparsity_info(prune_harness.model, verbose=False)
         if is_iterative:
             if level != 0:
-                perturbation_level_dict = compute_perturbation(
-                                                            model = prune_harness.model,
-                                                            density=densities[level],
-                                                            perturbation_table=perturbation_table,
-                                                            level=level) 
-                pert_stats['level'].append(perturbation_level_dict['level'])
-                pert_stats['pre_sparsity'].append(perturbation_level_dict['pre_sparsity'])
-                pert_stats['post_sparsity'].append(perturbation_level_dict['post_sparsity'])
-                pert_stats['pre_test_acc'].append(perturbation_level_dict['pre_test_acc'])
-                pert_stats['post_test_acc'].append(perturbation_level_dict['post_test_acc'])
-                pert_stats['perturbation'].append(perturbation_level_dict['perturbation'])
-                
-                pd.DataFrame(pert_stats).to_csv(perturbation_dict_path, index=False)
-                
                 print(f"Pruning Model at level: {level}")
                 prune_harness.load_from_ckpt(
                     os.path.join(expt_dir, "checkpoints", f"model_level_{level-1}.pt")
@@ -423,16 +376,62 @@ if __name__ == "__main__":
                     model=prune_harness.model,
                     training_type=config["experiment_params.training_type"],
                 )
+
+                print_sparsity_info(prune_harness.model, verbose=False)
         else:
             print('we out here pruning at init')
             prune_harness.prune_at_initialization(er_init=densities[level])
-
             print_sparsity_info(prune_harness.model, verbose=False)
-        main(model = prune_harness.model, level=level, expt_dir=packaged)
-        if (level != 0) and (is_iterative):
-            print("$" * 20, 'Running Linear Mode Connectivity', "$" * 20)
-            linear_mode = LinearModeConnectivity(expt_path=expt_dir, model=prune_harness.model)
-            linear_mode.gen_linear_mode(level1=level-1, level2=level)
-        print(f"Training level {level} complete, moving on to {level+1}") 
+        mp.spawn(
+            main,
+            args=(prune_harness.model, level, packaged),
+            nprocs=world_size,
+            join=True,
+        )
+        print(f"Training level {level} complete, moving on to {level+1}")n
+    wandb.finish()
 
+
+    prune_harness = pruning_utils.PruningStuff()
+
+
+    resume_level = config["experiment_params.resume_level"]
+    prefix, expt_dir = gen_expt_dir()
+    packaged = (prefix, expt_dir)
+    save_config(expt_dir=expt_dir, config=config)
+
+    is_iterative = (config['prune_params.er_method'] == 'just dont') and (config['prune_params.prune_method'] != 'just dont')
+
+    if is_iterative:
+        densities = generate_densities(current_sparsity=print_sparsity_info(prune_harness.model, verbose=False))
+    else:
+        densities = [config['prune_params.er_init']]
+
+    for level in range(resume_level, len(densities)):
+        print_sparsity_info(prune_harness.model, verbose=False)
+        if is_iterative:
+            if level != 0:
+                print(f"Pruning Model at level: {level}")
+                prune_harness.load_from_ckpt(
+                    os.path.join(expt_dir, "checkpoints", f"model_level_{level-1}.pt")
+                )
+                prune_harness.level_pruner(density=densities[level])
+                prune_harness.model = reset_weights(
+                    expt_dir=expt_dir,
+                    model=prune_harness.model,
+                    training_type=config["experiment_params.training_type"],
+                )
+
+                print_sparsity_info(prune_harness.model, verbose=False)
+        else:
+            print('we out here pruning at init')
+            prune_harness.prune_at_initialization(er_init=densities[level])
+            print_sparsity_info(prune_harness.model, verbose=False)
+        mp.spawn(
+            main,
+            args=(prune_harness.model, level, packaged),
+            nprocs=world_size,
+            join=True,
+        )
+        print(f"Training level {level} complete, moving on to {level+1}")
     wandb.finish()

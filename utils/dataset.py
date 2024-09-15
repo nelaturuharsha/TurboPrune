@@ -164,7 +164,7 @@ class imagenet:
             ]
 
         val_image_pipeline = [
-            CenterCropRGBImageDecoder((256, 256), ratio=DEFAULT_CROP_RATIO),
+            CenterCropRGBImageDecoder((224, 224), ratio=DEFAULT_CROP_RATIO),
             ToTensor(),
             ToDevice(torch.device(self.this_device), non_blocking=True),
             ToTorchImage(),
