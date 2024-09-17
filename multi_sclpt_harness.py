@@ -206,6 +206,7 @@ class Harness:
             epoch_schedule = generate_budgeted_schedule()
         else:
             epoch_schedule = [single_cycle_length]
+            num_cycles = 1
         print(f'Epoch Schedule: {epoch_schedule}')
 
         for cycle in range(num_cycles):

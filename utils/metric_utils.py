@@ -22,8 +22,9 @@ def test(model):
     Returns:
         (float, float): Test loss and accuracy.
     """
+    config = get_current_config()
     this_device = 'cuda'
-    test_loader = CifarLoader(path='./cifar10', batch_size=512, train=False)
+    test_loader = CifarLoader(path='./cifar10', batch_size=512, train=False, dataset=config['dataset.dataset_name'])
 
     model.to(this_device)
     criterion = nn.CrossEntropyLoss()
@@ -97,13 +98,15 @@ def compute_perturbation(er_method, prune_method, model, density, perturbation_t
 class LinearModeConnectivity:
     def __init__(self, expt_path : str, model : nn.Module):
         super(LinearModeConnectivity, self).__init__()
+
+        self.config = get_current_config()
+
         self.this_device = 'cuda'
-        self.train_loader = airbench.CifarLoader(path='./cifar10', batch_size=512, train=True, aug={'flip' : True, 'translate' : 2}, altflip=True)
-        self.test_loader = airbench.CifarLoader(path='./cifar10', batch_size=512, train=False)
+        self.train_loader = CifarLoader(path='./cifar10', batch_size=512, train=True, aug={'flip' : True, 'translate' : 2}, altflip=True, dataset=self.config['dataset.dataset_name'])
+        self.test_loader = CifarLoader(path='./cifar10', batch_size=512, train=False, dataset=self.config['dataset.dataset_name'])
         
         self.alphas = np.arange(0, 1, 0.1)
         self.criterion = nn.CrossEntropyLoss()
-        self.config = get_current_config()
 
         self.expt_path = expt_path
         self.model = model
@@ -217,7 +220,8 @@ class LinearModeConnectivity:
         pd.DataFrame(data_dict).to_csv(save_path, index=False)
         
 def hessian_trace(train_loader, model):
-    train_loader = airbench.CifarLoader(path='./cifar10', batch_size=1000, train=True, aug={'flip' : True, 'translate' : 2}, altflip=True, drop_last=True)
+    config = get_current_config()
+    train_loader = CifarLoader(path='./cifar10', batch_size=1000, train=True, aug={'flip' : True, 'translate' : 2}, altflip=True, drop_last=True, dataset=config['dataset.dataset_name'])
 
     criterion = nn.CrossEntropyLoss()
     model.train()

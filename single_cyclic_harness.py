@@ -399,12 +399,13 @@ if __name__ == "__main__":
         print_sparsity_info(prune_harness.model, verbose=False)
         if is_iterative:
             if level != 0:
+                """
                 perturbation_level_dict = compute_perturbation(
                                                             model = prune_harness.model,
                                                             density=densities[level],
                                                             perturbation_table=perturbation_table,
                                                             level=level) 
-                pert_stats['level'].append(perturbation_level_dict['level'])
+                #pert_stats['level'].append(perturbation_level_dict['level'])
                 pert_stats['pre_sparsity'].append(perturbation_level_dict['pre_sparsity'])
                 pert_stats['post_sparsity'].append(perturbation_level_dict['post_sparsity'])
                 pert_stats['pre_test_acc'].append(perturbation_level_dict['pre_test_acc'])
@@ -412,7 +413,7 @@ if __name__ == "__main__":
                 pert_stats['perturbation'].append(perturbation_level_dict['perturbation'])
                 
                 pd.DataFrame(pert_stats).to_csv(perturbation_dict_path, index=False)
-                
+                """
                 print(f"Pruning Model at level: {level}")
                 prune_harness.load_from_ckpt(
                     os.path.join(expt_dir, "checkpoints", f"model_level_{level-1}.pt")
@@ -429,10 +430,10 @@ if __name__ == "__main__":
 
             print_sparsity_info(prune_harness.model, verbose=False)
         main(model = prune_harness.model, level=level, expt_dir=packaged)
-        if (level != 0) and (is_iterative):
-            print("$" * 20, 'Running Linear Mode Connectivity', "$" * 20)
-            linear_mode = LinearModeConnectivity(expt_path=expt_dir, model=prune_harness.model)
-            linear_mode.gen_linear_mode(level1=level-1, level2=level)
+        #if (level != 0) and (is_iterative):
+        #    print("$" * 20, 'Running Linear Mode Connectivity', "$" * 20)
+        #    linear_mode = LinearModeConnectivity(expt_path=expt_dir, model=prune_harness.model)
+        #    linear_mode.gen_linear_mode(level1=level-1, level2=level)
         print(f"Training level {level} complete, moving on to {level+1}") 
 
     wandb.finish()

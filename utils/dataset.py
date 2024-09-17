@@ -115,7 +115,6 @@ class CIFARLoader:
 
 class imagenet:
     """
-    Relevant DataLoaders and other functions for training on ImageNet.
     Uses FFCV. Please ensure that it is installed!
 
     Args:

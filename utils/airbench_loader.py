@@ -64,7 +64,10 @@ def batch_cutout(inputs, size):
 class CifarLoader:
 
     def __init__(self, path, train=True, batch_size=500, aug=None, drop_last=None, shuffle=None, altflip=False, dataset='CIFAR10'):
-
+        if dataset=='CIFAR10':
+            path = 'cifar10'
+        else:
+            path=='cifar100'
         data_path = os.path.join(path, 'train.pt' if train else 'test.pt')
         lock_path = data_path + '.lock'  # Define the lock file path
 
