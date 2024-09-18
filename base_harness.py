@@ -1,5 +1,6 @@
 ## pythonic imports
 import os
+import random
 import numpy as np
 import pandas as pd
 from argparse import ArgumentParser
@@ -19,9 +20,10 @@ from torch.cuda.amp import autocast
 ## file-based imports
 import utils.schedulers as schedulers
 import utils.pruning_utils as pruning_utils
-from utils.harness_utils import *
-from utils.dataset import CIFARLoader, imagenet
+from utils.metric_utils import compute_hessian
 
+from utils.harness_utils import *
+from utils.dataset import CIFARLoader, imagenet, imagenet_pytorch, imagenet_subsampled, CIFARLoader_subsampled
 ## fastargs
 from fastargs import get_current_config
 from fastargs.decorators import param
@@ -43,11 +45,19 @@ class Harness:
         self.this_device = f"cuda:{self.gpu_id}"
         self.criterion = nn.CrossEntropyLoss()
 
+        use_ffcv = self.config["dataset.use_ffcv"]
         if "CIFAR" not in self.config["dataset.dataset_name"]:
-            self.loaders = imagenet(this_device=self.this_device, distributed=True)
+            if use_ffcv:
+                print('Using FFCV dataloader')
+                self.loaders = imagenet(this_device=self.this_device, distributed=True)
+                
+            else:
+                print('Using the standard dataloader for ImageNet')
+                world_size = torch.cuda.device_count()
+                self.loaders = imagenet_pytorch(world_size=world_size, rank=gpu_id, this_device=self.this_device, distributed=True)
         else:
             self.loaders = CIFARLoader(distributed=True)
-
+               
         self.train_loader = self.loaders.train_loader
         self.test_loader = self.loaders.test_loader
 
@@ -66,7 +76,7 @@ class Harness:
             'float32': (torch.float32, False)
         }
         return dtype_map.get(training_precision, (torch.float32, False))
-    
+  
     @param("optimizer.optim_type")
     @param("optimizer.lr")
     @param("optimizer.momentum")
@@ -96,11 +106,13 @@ class Harness:
             print('using schedule free')
         
         elif optim_type == 'AdamW':
-            self.optimizer = optim.AdamW(self.model.parameters(), lr=lr, betas=(0.9, 0.999), eps=1e-08, weight_decay=0.01)
+            self.optimizer = optim.AdamW(self.model.parameters(), lr=lr, betas=(0.9, 0.999), eps=1e-08, weight_decay=weight_decay)
             scheduler = getattr(schedulers, scheduler_type)                
             if scheduler_type == 'TriangularSchedule':
                 self.scheduler = scheduler(optimizer=self.optimizer, steps_per_epoch=len(self.train_loader), epochs_per_level=epochs_per_level)
-                
+            elif scheduler_type == 'CosineLRWarmup':
+                    self.scheduler = scheduler(optimizer=self.optimizer)
+
         else:
             self.optimizer = optim.SGD(
                     self.model.parameters(), lr=lr, momentum=momentum, weight_decay=weight_decay
@@ -116,6 +128,11 @@ class Harness:
                                                 cooldown_steps=len(self.train_loader) * self.config['optimizer.cooldown_steps'])
                 elif scheduler_type == 'MultiStepLRWarmup':
                     self.scheduler = scheduler(optimizer=self.optimizer)
+                elif scheduler_type == 'ImageNetLRDropsWarmup':
+                    self.scheduler = scheduler(optimizer=self.optimizer)
+                elif scheduler_type == 'CosineLRWarmup':
+                    self.scheduler = scheduler(optimizer=self.optimizer)
+
             else:
                 self.scheduler = optim.lr_scheduler.OneCycleLR(self.optimizer,
                                                               max_lr=lr,
@@ -147,10 +164,10 @@ class Harness:
 
             self.optimizer.zero_grad()
             with autocast(dtype=self.precision, enabled = self.use_amp):
+                # remove the contiguous to check for the grad init warning.
                 outputs = model(inputs.contiguous())
                 loss = self.criterion(outputs, targets)
-            outputs = model(inputs)
-            loss = self.criterion(outputs, targets)
+            
             loss.backward()
             self.optimizer.step()
 
@@ -159,13 +176,16 @@ class Harness:
             total += targets.size(0)
             correct += predicted.eq(targets).sum().item()
 
-            if (self.scheduler is not None) and (self.config['optimizer.scheduler_type'] != 'MultiStepLRWarmup'):
+            if (self.scheduler is not None) and (self.config['optimizer.scheduler_type'] != 'MultiStepLRWarmup') and (self.config['optimizer.scheduler_type'] != 'ImageNetLRDropsWarmup') and (self.config['optimizer.scheduler_type'] != 'CosineLRWarmup'):
                 #print('Running Trapezoidal/Triangular/OneCycle')
                 self.scheduler.step()
             
-        if self.config["optimizer.scheduler_type"] == 'MultiStepLRWarmup':
+        if self.config['optimizer.scheduler_type'] == 'MultiStepLRWarmup' or self.config['optimizer.scheduler_type'] == 'ImageNetLRDropsWarmup' or self.config['optimizer.scheduler_type'] == 'CosineLRWarmup':
             #print('Step LR')
             self.scheduler.step()
+        if self.scheduler is not None:
+            print('The Learning Rate at epoch {} is {}'.format(epoch, self.optimizer.param_groups[0]["lr"]))
+        
         train_loss /= len(self.train_loader)
         accuracy = 100.0 * (correct / total)
         return train_loss, accuracy
@@ -205,8 +225,9 @@ class Harness:
 
     @param("experiment_params.epochs_per_level")
     @param("experiment_params.training_type")
+    @param("experiment_params.compute_eigenvals")
     def train_one_level(
-        self, epochs_per_level: int, training_type: str, level: int
+        self, epochs_per_level: int, training_type: str, compute_eigenvals: bool, level: int
     ) -> None:
         """Train the model for one full level. This can thought of as one full training run.
 
@@ -285,12 +306,38 @@ class Harness:
             summary_path = os.path.join(self.expt_dir, "metrics", "summary.csv")
 
             if not os.path.exists(summary_path):
+                print('Saving Summary to {}', summary_path)
                 pd.DataFrame(data_df).to_csv(summary_path, index=False)
             else:
                 pre_df = pd.read_csv(summary_path)
                 new_df = pd.DataFrame(data_df)
                 updated_df = pd.concat([pre_df, new_df], ignore_index=True)
                 updated_df.to_csv(summary_path, index=False)
+
+            # also save the eigenvals
+            if compute_eigenvals:
+                # to track the eigenvalues of the hessian if enabled
+                eigvals = {
+                    "level": [],
+                    "sparsity": [],
+                    "max_test_acc": [],
+                    "eigvals": [],
+                }
+                eigenvals = compute_hessian(self.model, self.train_loader)
+                eigvals["level"].append(level)
+                eigvals["sparsity"].append(round(sparsity, 4))
+                eigvals["max_test_acc"].append(round(max(sparsity_level_df["test_acc"]), 4))
+                eigvals["eigvals"].append(eigenvals)
+                # save eigenvals
+                eig_path = os.path.join(self.expt_dir, "metrics", "eigvals.csv")
+                if not os.path.exists(eig_path):
+                    print('Saving Summary to {}', eig_path)
+                    pd.DataFrame(eigvals).to_csv(eig_path, index=False)
+                else:
+                    pre_df = pd.read_csv(eig_path)
+                    new_df = pd.DataFrame(eigvals)
+                    updated_df = pd.concat([pre_df, new_df], ignore_index=True)
+                    updated_df.to_csv(eig_path, index=False)
 
 
 @param("dist_params.address")
@@ -369,32 +416,36 @@ if __name__ == "__main__":
 
     prune_harness = pruning_utils.PruningStuff()
 
+    # Prune at initialization
+    prune_harness.prune_at_initialization()
+    
     # if you provide resume level and resume experiment directory, it will pick up from where it stopped automatically
     resume_level = config["experiment_params.resume_level"]
     expt_dir = gen_expt_dir()
     save_config(expt_dir=expt_dir, config=config)
     densities = generate_densities()
 
-    for level in range(resume_level, len(densities)):
-        print_sparsity_info(prune_harness.model, verbose=False)
-        if level != 0:
-            print(f"Pruning Model at level: {level}")
-            prune_harness.load_from_ckpt(
-                os.path.join(expt_dir, "checkpoints", f"model_level_{level-1}.pt")
-            )
-            prune_harness.level_pruner(density=densities[level])
-            prune_harness.model = reset_weights(
-                expt_dir=expt_dir,
-                model=prune_harness.model,
-                training_type=config["experiment_params.training_type"],
-            )
-
+    if densities is not None:
+        for level in range(resume_level, len(densities)):
             print_sparsity_info(prune_harness.model, verbose=False)
+            if level != 0:
+                print(f"Pruning Model at level: {level}")
+                prune_harness.load_from_ckpt(
+                    os.path.join(expt_dir, "checkpoints", f"model_level_{level-1}.pt")
+                )
+                prune_harness.level_pruner(density=densities[level])
+                prune_harness.model = reset_weights(
+                    expt_dir=expt_dir,
+                    model=prune_harness.model,
+                    training_type=config["experiment_params.training_type"],
+                )
 
-        mp.spawn(
-            main,
-            args=(prune_harness.model, level, expt_dir),
-            nprocs=world_size,
-            join=True,
-        )
-        print(f"Training level {level} complete, moving on to {level+1}")
+                print_sparsity_info(prune_harness.model, verbose=False)
+
+            mp.spawn(
+                main,
+                args=(prune_harness.model, level, expt_dir),
+                nprocs=world_size,
+                join=True,
+            )
+            print(f"Training level {level} complete, moving on to {level+1}")

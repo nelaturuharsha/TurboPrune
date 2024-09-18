@@ -235,7 +235,8 @@ def generate_densities(prune_method: str, num_levels: int, prune_rate: float
     Returns:
         list[float]: List of densities for each level.
     """
-    
+    if num_levels == 0:
+        return None
     densities = [(1 - prune_rate) ** i for i in range(num_levels)]
     return densities
 

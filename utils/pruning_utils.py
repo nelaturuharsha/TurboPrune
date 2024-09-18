@@ -14,7 +14,7 @@ from torch.amp import autocast
 from utils.conv_type import ConvMask, Conv1dMask, LinearMask, replace_layers, replace_vit_layers
 from utils.harness_params import get_current_params
 from utils.custom_models import PreActResNet, PreActBlock
-from utils.dataset import imagenet, CIFARLoader
+from utils.dataset import imagenet, CIFARLoader, CIFARLoader_subsampled, imagenet_subsampled
 
 # import deit model
 from utils.deit import deit_tiny_patch16_224, deit_small_patch16_224 
@@ -103,10 +103,10 @@ class PruningStuff:
             model = PreActResNet(block=PreActBlock, num_blocks=[2, 2, 2, 2])
         
         elif "ImageNet" in dataset_name and "deit-small" in model_name:
-            model = deit_small_patch16_224()
+            model = deit_small_patch16_224(pretrained=False)
         elif "ImageNet" in dataset_name and "deit-tiny" in model_name:
             print('Initializing a DeiT')
-            model = deit_tiny_patch16_224()
+            model = deit_tiny_patch16_224(pretrained=False)
         else:
             model = getattr(models, model_name)(num_classes=num_classes)
 
@@ -129,9 +129,9 @@ class PruningStuff:
 
         # Replacing the layers.
         if "deit" in model_name:
-            replace_vit_layers(model=model)
+            model = replace_vit_layers(model=model)
         else:
-            replace_layers(model=model)
+            model = replace_layers(model=model)
         
         # Load from a fixed init wherever possible, this should be seed specific
         # TODO
@@ -148,8 +148,9 @@ class PruningStuff:
 
     @param("prune_params.er_method")
     @param("prune_params.er_init")
+    @param("prune_params.update_sign_init")
     def prune_at_initialization(
-        self, er_method: str, er_init: float) -> nn.Module:
+        self, er_method: str, er_init: float, update_sign_init: bool) -> nn.Module:
         """Prune the model at initialization.
 
         Args:
@@ -174,14 +175,22 @@ class PruningStuff:
         pruner_method = globals().get(er_method_name)
         if er_method in {"synflow", "snip"}:
             self.model = pruner_method(self.model, self.train_loader, er_init)
+        elif er_method == "just dont":
+            print('We dont prune at init')
+            pass
         else:
+            print('Prune method: {}'.format(er_method_name))
             pruner_method(self.model, er_init)
 
+        if update_sign_init:
+            update_func = globals().get('update_sign_from_grad')
+            self.model = update_func(self.model, self.train_loader, frac=0.2)
         print('We just pruned at init, woohoo!')
 
 
     @param("prune_params.prune_method")
-    def level_pruner(self, prune_method: str, density: float) -> None:
+    @param("prune_params.update_sign_every_level")
+    def level_pruner(self, prune_method: str, density: float, update_sign_every_level: bool) -> None:
         """Prune the model at a specific density level.
 
         Args:
@@ -196,8 +205,18 @@ class PruningStuff:
         pruner_method = globals().get(prune_method_name)
         if prune_method in {"synflow", "snip"}:
             self.model = pruner_method(self.model, self.train_loader, density)
+        elif prune_method == "just dont":
+            print('We dont prune at the end of the level')
+            pass
         else:
             pruner_method(self.model, density)
+        
+        if update_sign_every_level:
+            update_func = globals().get('update_sign_from_grad')
+            self.model = update_func(self.model, self.train_loader, frac=0.2)
+
+        # put the model back on the GPU
+        self.model.to(self.this_device)
 
         print("---" * 20)
         print(f"Density after pruning: {get_sparsity(self.model)}")
@@ -316,6 +335,46 @@ def prune_random_erk(model: nn.Module, density: float) -> nn.Module:
     )
     return model
 
+def update_sign_from_grad(model: nn.Module, trainloader: Any, frac: float) -> nn.Module:
+    # This function is designed to choose a fraction of the smallest parameters and update their signs based on their gradient value
+    num_steps = 10
+    criterion = nn.CrossEntropyLoss()
+    model.zero_grad()
+    print('Updating the Sign of the mask')
+    for i, (images, target) in enumerate(trainloader):
+        images = images.to(torch.device("cuda"))
+        target = target.to(torch.device("cuda")).long()
+        with autocast(dtype=torch.bfloat16, device_type='cuda'):
+            output = model(images)
+            loss = criterion(output, target)
+            loss.backward()
+            # accumulate the gradient over multiple steps
+        if i == num_steps:
+            break
+    
+    # based on the value of the magnitude, flip the smallest fraction of weights inside the mask
+    # since these values are close to zero and are more likely to flip
+    score_list = {}
+    for n, m in model.named_modules():
+        if isinstance(m, (ConvMask, Conv1dMask, LinearMask)):
+            score = (m.weight).detach().abs_()
+            # elements outside the mask should have a high score so they are ingnored
+            score = torch.where(m.mask.to(m.weight.device) == 0, 10.0, score)
+            score_list[n] = score
+
+    global_scores = torch.cat([torch.flatten(v) for v in score_list.values()])
+    k = int(frac * global_scores.numel())
+    threshold, _ = torch.kthvalue(global_scores, k)
+    if not k < 1:
+        for n, m in model.named_modules():
+            if isinstance(m, (ConvMask, Conv1dMask, LinearMask)):
+                flip = torch.ones_like(m.weight.data)
+                # if the weight and the gradient have same sign: change the weight sign,
+                # if the weight and the gradient have opposite signs: keep the weight sign
+                flip = torch.where(score_list[n] <= k, torch.where(m.weight.data.sign() * m.weight.grad.sign() == 1, -1, 1), 1)
+                m.weight.data = flip * m.weight.data
+    return model
+    
 
 def prune_snip(model: nn.Module, trainloader: Any, density: float) -> nn.Module:
     """SNIP method for pruning of the model.

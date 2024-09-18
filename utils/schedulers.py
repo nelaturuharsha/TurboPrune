@@ -242,7 +242,7 @@ def step_trapezoidal(it, lr, num_iterations, warmup_iters, warmdown_iters):
 @param('optimizer.lr')
 def TriangularSchedule(epochs_per_level, lr, optimizer, steps_per_epoch):
     total_train_steps = epochs_per_level * steps_per_epoch
-    lr_schedule = np.interp(np.arange(1+total_train_steps), [0, int(lr * total_train_steps), total_train_steps], [lr, 1, 0]) 
+    lr_schedule = np.interp(np.arange(1+total_train_steps), [0, int(0.2 * total_train_steps), total_train_steps], [0.2, 1, 0]) 
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_schedule.__getitem__)
     return scheduler
 

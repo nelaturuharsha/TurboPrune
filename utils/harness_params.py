@@ -14,9 +14,11 @@ def get_current_params() -> None:
             "Name of dataset",
             required=True,
         ),
+        use_ffcv=Param(bool, "use FFCV distributed", default=True),
         batch_size=Param(int, "batch size", default=512),
         num_workers=Param(int, "num_workers", default=32),
         data_root=Param(str, "path to betons", required=True),
+        subsample_frac=Param(float, "fraction of dataset to use in subsampled version", default=0.5),
     )
 
     Section("prune_params", "pruning configuration").params(
@@ -33,6 +35,8 @@ def get_current_params() -> None:
             default='mag',
         ),
         num_levels=Param(int, "number of pruning levels", required=True),
+        update_sign_init=Param(bool, "update sign based on the gradient at init", default=False),
+        update_sign_every_level=Param(bool, "update sign based on the gradient after level", default=False),
     )
 
     Section("experiment_params", "parameters to train model").params(
@@ -46,7 +50,8 @@ def get_current_params() -> None:
         resume_expt_name=Param(str, "resume path"),
         expt_name=Param(str, "name of the experiment we want to run", required=True),
         num_cycles=Param(int, "number of cyclic repetition of the LR schedule in one cycle", default=1),
-        training_precision = Param(And(str, OneOf(['bfloat16', 'float32'])), default='float32')
+        training_precision = Param(And(str, OneOf(['bfloat16', 'float32'])), default='float32'),
+        compute_eigenvals = Param(bool, "compute the eigenvalues of the hessian using the eigenthings library", default=False),
     )
 
     Section("optimizer", "data related stuff").params(
@@ -63,7 +68,7 @@ def get_current_params() -> None:
                     [
                         "MultiStepLRWarmup",
                         "ImageNetLRDropsWarmup",
-                        #"CosineLRWarmup",
+                        "CosineLRWarmup",
                         "TriangularSchedule",
                         "ScheduleFree",
                         "TrapezoidalSchedule",
@@ -74,6 +79,7 @@ def get_current_params() -> None:
             required=True,
         ),
         lr_min=Param(float, "minimum learning rate for cosine", default=0.01),
+        use_sam=Param(bool, "if SAM should be used for optimization", default=False),
     )
 
     Section("dist_params", "distributed parameters").params(

@@ -144,7 +144,7 @@ def replace_layers(conv_type: str, model: nn.Module) -> nn.Module:
     layers_to_replace = []
 
     conv_layer_of_type = globals().get(conv_type)
-
+    print(conv_layer_of_type)
     for name, layer in model.named_modules():
         if "downsample" in name:
             continue

@@ -13,6 +13,7 @@ from utils.harness_utils import *
 
 import airbench
 from pyhessian import hessian
+from hessian_eigenthings import compute_hessian_eigenthings
 
 get_current_config()
 
@@ -237,3 +238,13 @@ def hessian_trace(train_loader, model):
     del hessian_comp
     print('trace of hessian: ', trace)
     return trace
+
+
+def compute_hessian(model, trainloader):
+    print('Evaluating the hessian using the power iteration method')
+    criterion = nn.CrossEntropyLoss()
+    eigenvals, eigenvecs = compute_hessian_eigenthings(model, trainloader,
+                                               criterion, num_eigenthings=20, 
+                                               full_dataset=False, mode="power_iter", 
+                                               use_gpu=True, fp16=False,)
+    return eigenvals
