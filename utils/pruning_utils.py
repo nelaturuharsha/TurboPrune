@@ -63,7 +63,7 @@ class PruningStuff:
         self.config = get_current_config()
 
         if self.config['dataset.dataset_name'] == 'ImageNet':
-            self.loaders = imagenet(distributed=False, this_device='cuda')
+            self.loaders = imagenet(distributed=False, this_device='cuda', batch_size=512)
             self.train_loader = self.loaders.train_loader
         elif 'CIFAR' in self.config['dataset.dataset_name']:
             if torch.cuda.device_count() == 1:
@@ -111,7 +111,7 @@ class PruningStuff:
 
         replace_layers(model=model)
 
-        model.to(self.this_device)
+        model = model.to(self.this_device)
         return model
 
     @param("prune_params.er_method")
@@ -127,7 +127,7 @@ class PruningStuff:
         Returns:
             nn.Module: The pruned model.
         """
-        self.model = self.acquire_model()
+        
         total = 0
         nonzero = 0
         for n, m in self.model.named_modules():
@@ -285,6 +285,14 @@ def prune_random_erk(model: nn.Module, density: float) -> nn.Module:
     )
     return model
 
+@param('experiment_params.training_precision')
+def get_dtype_amp(training_precision):
+    dtype_map = {
+        'bfloat16': (torch.bfloat16, True),
+        'float16': (torch.float16, True),
+        'float32': (torch.float32, False)
+    }
+    return dtype_map.get(training_precision, (torch.float32, False))
 
 def prune_snip(model: nn.Module, trainloader: Any, density: float) -> nn.Module:
     """SNIP method for pruning of the model.
@@ -297,11 +305,13 @@ def prune_snip(model: nn.Module, trainloader: Any, density: float) -> nn.Module:
     Returns:
         nn.Module: The pruned model.
     """
+
+    precision, use_amp = get_dtype_amp()
     criterion = nn.CrossEntropyLoss()
     for i, (images, target) in enumerate(trainloader):
         images = images.to(torch.device("cuda"))
         target = target.to(torch.device("cuda")).long()
-        with autocast(dtype=torch.bfloat16, device_type='cuda'):
+        with autocast('cuda', dtype=precision, enabled = use_amp):
             model.zero_grad()
             output = model(images)
             criterion(output, target).backward()
@@ -376,6 +386,7 @@ def prune_synflow(model: nn.Module, trainloader: Any, density: float) -> nn.Modu
         for n, param in model.state_dict().items():
             param.mul_(signs[n])
 
+    precision, use_amp = get_dtype_amp()
     signs = linearize(model)
 
     for i, (images, target) in enumerate(trainloader):
@@ -383,7 +394,7 @@ def prune_synflow(model: nn.Module, trainloader: Any, density: float) -> nn.Modu
         target = target.to(torch.device("cuda")).long()
         input_dim = list(images[0, :].shape)
         input = torch.ones([1] + input_dim).to("cuda")
-        with autocast(dtype=torch.bfloat16, device_type='cuda'):
+        with autocast('cuda', dtype=precision, enabled = use_amp):
             output = model(input)
             torch.sum(output).backward()
         break

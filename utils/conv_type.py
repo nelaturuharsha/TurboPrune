@@ -175,5 +175,4 @@ def replace_layers(conv_type: str, model: nn.Module) -> nn.Module:
             )
             setattr(parent_module, parts[-1], conv_mask_layer)
 
-    print(model)
     return model

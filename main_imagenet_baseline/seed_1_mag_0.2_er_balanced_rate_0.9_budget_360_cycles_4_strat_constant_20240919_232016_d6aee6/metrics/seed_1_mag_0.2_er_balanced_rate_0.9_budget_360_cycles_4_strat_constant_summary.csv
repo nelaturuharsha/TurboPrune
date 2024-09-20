@@ -1,0 +1,2 @@
+level,sparsity,final_test_acc,max_test_acc,training_schedule
+0,0.9004,71.792,71.792,90-90-90-90
