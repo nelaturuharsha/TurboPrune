@@ -442,7 +442,7 @@ if __name__ == "__main__":
         )
         print(f"Training level {level} complete, moving on to {level+1}")
     
-    prune_harness.level_pruner(density=config['prune_params.prune_rate'])
+    prune_harness.level_pruner(density=config['prune_params.prune_rate'], level=level)
 
     print(f'Sparsity is {print_sparsity_info(prune_harness.model, verbose=False)}')
 

@@ -21,6 +21,7 @@ from torch.cuda.amp import autocast
 import utils.schedulers as schedulers
 import utils.pruning_utils as pruning_utils
 from utils.metric_utils import compute_hessian
+from utils.optim_sam import SAM
 
 from utils.harness_utils import *
 from utils.dataset import CIFARLoader, imagenet, imagenet_pytorch, imagenet_subsampled, CIFARLoader_subsampled
@@ -82,9 +83,10 @@ class Harness:
     @param("optimizer.momentum")
     @param("optimizer.weight_decay")
     @param("optimizer.scheduler_type")
+    @param("optimizer.use_sam")
     @param("experiment_params.epochs_per_level")
     def create_optimizers(
-        self, optim_type: str, lr: float, momentum: float, weight_decay: float, scheduler_type: str, epochs_per_level: int
+        self, optim_type: str, lr: float, momentum: float, weight_decay: float, scheduler_type: str, use_sam: bool, epochs_per_level: int
     ) -> None:
         """Instantiate the optimizer and learning rate scheduler.
 
@@ -94,6 +96,7 @@ class Harness:
             weight_decay (float): Weight decay for optimizer.
             scheduler_type (str): Type of scheduler.
         """
+        self.use_sam = use_sam
         if scheduler_type =='ScheduleFree':
             self.optimizer = schedulefree.SGDScheduleFree(
                 self.model.parameters(),
@@ -117,6 +120,9 @@ class Harness:
             self.optimizer = optim.SGD(
                     self.model.parameters(), lr=lr, momentum=momentum, weight_decay=weight_decay
                 )
+            if use_sam:
+                self.optimizer = SAM(self.model.parameters(), torch.optim.SGD, lr=lr, momentum=momentum, weight_decay=weight_decay)
+            
             if scheduler_type != 'OneCycleLR':
                 scheduler = getattr(schedulers, scheduler_type)            
                 
@@ -168,8 +174,14 @@ class Harness:
                 outputs = model(inputs.contiguous())
                 loss = self.criterion(outputs, targets)
             
-            loss.backward()
-            self.optimizer.step()
+            if self.use_sam:
+                loss.backward()
+                self.optimizer.first_step(zero_grad=True)                    
+                self.criterion(model(inputs), targets).backward()  # make sure to do a full forward pass
+                self.optimizer.second_step(zero_grad=True)
+            else:
+                loss.backward()
+                self.optimizer.step()
 
             train_loss += loss.item()
             _, predicted = outputs.max(1)
@@ -433,7 +445,7 @@ if __name__ == "__main__":
                 prune_harness.load_from_ckpt(
                     os.path.join(expt_dir, "checkpoints", f"model_level_{level-1}.pt")
                 )
-                prune_harness.level_pruner(density=densities[level])
+                prune_harness.level_pruner(density=densities[level], level=level)
                 prune_harness.model = reset_weights(
                     expt_dir=expt_dir,
                     model=prune_harness.model,

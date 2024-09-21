@@ -190,7 +190,7 @@ class PruningStuff:
 
     @param("prune_params.prune_method")
     @param("prune_params.update_sign_every_level")
-    def level_pruner(self, prune_method: str, density: float, update_sign_every_level: bool) -> None:
+    def level_pruner(self, prune_method: str, density: float, level: int, update_sign_every_level: bool) -> None:
         """Prune the model at a specific density level.
 
         Args:
@@ -213,7 +213,7 @@ class PruningStuff:
         
         if update_sign_every_level:
             update_func = globals().get('update_sign_from_grad')
-            self.model = update_func(self.model, self.train_loader, frac=0.2)
+            self.model = update_func(self.model, self.train_loader, frac=0.05)
 
         # put the model back on the GPU
         self.model.to(self.this_device)

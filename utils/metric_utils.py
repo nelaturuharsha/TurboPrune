@@ -239,7 +239,6 @@ def hessian_trace(train_loader, model):
     print('trace of hessian: ', trace)
     return trace
 
-
 def compute_hessian(model, trainloader):
     print('Evaluating the hessian using the power iteration method')
     criterion = nn.CrossEntropyLoss()

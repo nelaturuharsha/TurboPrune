@@ -475,7 +475,7 @@ if __name__ == "__main__":
             prune_harness.load_from_ckpt(
                 os.path.join(expt_dir, "checkpoints", f"model_level_{level-1}.pt")
             )
-            prune_harness.level_pruner(density=densities[level])
+            prune_harness.level_pruner(density=densities[level], level=level)
             prune_harness.model = reset_weights(
                 expt_dir=expt_dir,
                 model=prune_harness.model,

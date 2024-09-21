@@ -5,6 +5,7 @@ import torch.utils.data.distributed
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 from torch.utils.data import random_split, Subset
+from torch.utils.data.sampler import SubsetRandomSampler
 
 from fastargs import get_current_config
 from fastargs.decorators import param
@@ -222,9 +223,7 @@ class imagenet_subsampled:
         self.this_device = this_device
         self.config = get_current_config()
         # imagenet has these many train images
-        num_images = 14,197,122
-        k = int(subsample_frac * num_images)
-        indices = torch.randperm(num_images)[:k]
+        
         try:
             from ffcv.loader import Loader, OrderOption
             from ffcv.transforms import (
@@ -271,7 +270,13 @@ class imagenet_subsampled:
                 ToDevice(torch.device(self.this_device), non_blocking=True),
             ]
 
+        num_images = 1281167
+        indices = list(range(num_images))
+        # # Shuffle indices and select a subset
+        np.random.shuffle(indices)
+        indices = indices[:int(subsample_frac * num_images)]
 
+        print('Subsampled indiced are being chosen')
         self.train_loader = Loader(
             os.path.join(data_root, "train_500_0.50_90.beton"),
             batch_size=batch_size,
@@ -281,8 +286,9 @@ class imagenet_subsampled:
             drop_last=True,
             pipelines={"image": train_image_pipeline, "label": label_pipeline},
             distributed=distributed,
-            indices=indices,
+            indices=indices
         )
+        
 
         self.test_loader = Loader(
             os.path.join(data_root, "val_500_0.50_90.beton"),
