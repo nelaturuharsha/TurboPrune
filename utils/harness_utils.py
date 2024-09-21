@@ -34,6 +34,7 @@ def reset_weights(
             os.path.join(expt_dir, "checkpoints", "model_init.pt")
         )
     elif training_type == "wr":
+        print('I gotchu, rewinding to warmup init (Epoch 10)')
         original_dict = torch.load(
             os.path.join(expt_dir, "checkpoints", "model_rewind.pt")
         )
@@ -208,6 +209,7 @@ def gen_expt_dir(
         os.makedirs(f"{expt_dir}/metrics")
         os.makedirs(f"{expt_dir}/metrics/epochwise_metrics")
         os.makedirs(f"{expt_dir}/artifacts/")
+        os.makedirs(f"{expt_dir}/extended_checkpoints")
 
     return prefix, expt_dir
 

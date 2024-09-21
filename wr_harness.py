@@ -262,11 +262,10 @@ class Harness:
                 console.clear()
                 console.print(table)
 
-                if level == 0 and training_type == "wr" and epoch == 9:
-                    self._save_rewind_checkpoint()
+            torch.save(self.model.state_dict(), os.path.join(self.expt_dir, "extended_checkpoints", f"extended_level_{level}_cycle_{cycle}.pt"))
+            self._update_summary_metrics(level, summary_metrics, level_metrics, epoch_schedule)
 
         self._save_level_metrics(level, level_metrics)
-        self._update_summary_metrics(level, summary_metrics, level_metrics, epoch_schedule)
 
     def _log_metrics(self, cycle_epoch, train_loss, test_loss, train_acc, test_acc, level_metrics):
         level_metrics['cycle_epoch'].append(cycle_epoch)
@@ -281,23 +280,13 @@ class Harness:
             "epoch": self.epoch_counter
         })
 
-    def _save_rewind_checkpoint(self):
-        torch.save(
-            self.model.state_dict(),
-            os.path.join(self.expt_dir, "checkpoints", "model_rewind.pt"),
-        )
-        torch.save(
-            self.optimizer.state_dict(),
-            os.path.join(self.expt_dir, "artifacts", "optimizer_rewind.pt"),
-        )
-
     def _save_level_metrics(self, level, level_metrics):
         pd.DataFrame(level_metrics).to_csv(
             os.path.join(
                 self.expt_dir,
                 "metrics",
                 "epochwise_metrics",
-                f"level_{level}_metrics.csv",
+                f"extended_level_{level}_metrics.csv",
             )
         )
 
@@ -315,7 +304,7 @@ class Harness:
             "max_test_acc": round(max(level_metrics["test_acc"]), 4)
         })
 
-        summary_path = os.path.join(self.expt_dir, "metrics", f"{self.prefix}_summary.csv")
+        summary_path = os.path.join(self.expt_dir, "metrics", f"extended_level_{level}_{self.prefix}_summary.csv")
         self._save_or_update_summary(summary_path, summary_metrics)
 
     def _save_or_update_summary(self, summary_path, summary_metrics):
@@ -367,77 +356,49 @@ def initialize_config():
     return config
 
 if __name__ == "__main__":
-    config = initialize_config()
+    for resume_level in [6, 8]:
+        config = initialize_config()
 
-    wandb.init(project=config['wandb_params.project_name'])
-    world_size = torch.cuda.device_count()
-    print(f"Training on {world_size} GPUs")
-    perturbation_table = PrettyTable()
-    parser = ArgumentParser()
+        wandb.init(project=config['wandb_params.project_name'])
+        world_size = torch.cuda.device_count()
+        from rich.console import Console
+        from rich.panel import Panel
+        from rich.columns import Columns
 
-    prune_harness = pruning_utils.PruningStuff()
+        level = resume_level
 
-    resume_level = config["experiment_params.resume_level"]
-    prefix, expt_dir = gen_expt_dir()
-    print(expt_dir)
-    packaged = (prefix, expt_dir)
-    save_config(expt_dir=expt_dir, config=config)
+        prefix, expt_dir = gen_expt_dir()
 
-    is_iterative = (config['prune_params.er_method'] == 'just dont') and (config['prune_params.prune_method'] != 'just dont')
-    
-    metric_path = os.path.join(expt_dir, 'metrics')
-    perturbation_dict_path = os.path.join(metric_path, 'perturbation.csv')
-    pert_stats = {'level'         : [],
-                  'pre_sparsity'  : [],
-                  'post_sparsity' : [],
-                  'pre_test_acc'  : [],
-                  'post_test_acc' : [],
-                  'perturbation'  : []}
-    
-    if is_iterative:
-        densities = generate_densities(current_sparsity=print_sparsity_info(prune_harness.model, verbose=False))
-    else:
-        densities = [config['prune_params.er_init']]
-    
-    for level in range(resume_level, len(densities)):
-        print_sparsity_info(prune_harness.model, verbose=False)
-        if is_iterative:
-            if level != 0:
-                """
-                perturbation_level_dict = compute_perturbation(
-                                                            model = prune_harness.model,
-                                                            density=densities[level],
-                                                            perturbation_table=perturbation_table,
-                                                            level=level) 
-                #pert_stats['level'].append(perturbation_level_dict['level'])
-                pert_stats['pre_sparsity'].append(perturbation_level_dict['pre_sparsity'])
-                pert_stats['post_sparsity'].append(perturbation_level_dict['post_sparsity'])
-                pert_stats['pre_test_acc'].append(perturbation_level_dict['pre_test_acc'])
-                pert_stats['post_test_acc'].append(perturbation_level_dict['post_test_acc'])
-                pert_stats['perturbation'].append(perturbation_level_dict['perturbation'])
-                
-                pd.DataFrame(pert_stats).to_csv(perturbation_dict_path, index=False)
-                """
-                print(f"Pruning Model at level: {level}")
-                prune_harness.load_from_ckpt(
-                    os.path.join(expt_dir, "checkpoints", f"model_level_{level-1}.pt")
-                )
-                prune_harness.level_pruner(density=densities[level])
-                prune_harness.model = reset_weights(
-                    expt_dir=expt_dir,
-                    model=prune_harness.model,
-                    training_type=config["experiment_params.training_type"],
-                )
-        else:
-            print('we out here pruning at init')
-            prune_harness.prune_at_initialization(er_init=densities[level])
+        ## create a new folder for extended checkpoints
+        expt_dir_extended = os.path.join(expt_dir, "extended_checkpoints")
+        os.makedirs(expt_dir_extended, exist_ok=True)
 
-            print_sparsity_info(prune_harness.model, verbose=False)
+        packaged = (prefix, expt_dir)
+        save_config(expt_dir=expt_dir, config=config)
+
+        console = Console()
+        prune_harness = pruning_utils.PruningStuff()
+
+        prune_harness.load_from_ckpt(
+            os.path.join(expt_dir, "checkpoints", f"model_level_{level}.pt")
+        )
+        prune_harness.model = reset_weights(
+            expt_dir=expt_dir,
+            model=prune_harness.model,
+            training_type=config["experiment_params.training_type"],
+        )
+
+        sparsity = print_sparsity_info(prune_harness.model, verbose=False)
+
+        gpu_info = Panel(f"Training on {world_size} GPUs", title="GPU Info", border_style="blue")
+        pruning_info = Panel(f"Model at level: {level}", title="Pruning Info", border_style="green")
+        sparsity_info = Panel(f"Sparsity at the current level: {sparsity:.2%}", title="Sparsity Info", border_style="yellow")
+
+        console.print(Columns([gpu_info, pruning_info, sparsity_info]))
+
+
         main(model = prune_harness.model, level=level, expt_dir=packaged)
-        #if (level != 0) and (is_iterative):
-        #    print("$" * 20, 'Running Linear Mode Connectivity', "$" * 20)
-        #    linear_mode = LinearModeConnectivity(expt_path=expt_dir, model=prune_harness.model)
-        #    linear_mode.gen_linear_mode(level1=level-1, level2=level)
+        
         print(f"Training level {level} complete, moving on to {level+1}") 
 
-    wandb.finish()
+        wandb.finish()
