@@ -172,7 +172,6 @@ cifar10/
 cifar100/
 CIFAR100/
 ImageNet/
-*.yaml
 *.pt
 Thesis/
 dump_ckpt.py

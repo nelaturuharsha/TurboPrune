@@ -1,57 +1,35 @@
 ## pythonic imports
 import numpy as np
-import os
 
 ## torch
 import torch
 import torch.nn as nn
 
 ## torchvision
-import torchvision.models as models
 from torch.amp import autocast
+import torch.distributed as dist
 
 ## file-based imports
-from utils.conv_type import ConvMask, Conv1dMask, replace_layers
 from utils.harness_params import get_current_params
-from utils.custom_models import PreActResNet, PreActBlock
-from utils.dataset import imagenet, CIFARLoader
+from utils.custom_models import TorchVisionModel, CustomModel
+from utils.dataset import imagenet, AirbenchLoaders
+from utils.mask_layers import ConvMask, Conv1dMask, LinearMask
 
 ## fastargs
 from fastargs import get_current_config
 from fastargs.decorators import param
 from typing import Optional, Dict, Any
 
-from utils.airbench_loader import CifarLoader
+from rich.console import Console
+from rich.columns import Columns
+from rich.panel import Panel
+
 
 get_current_params()
 
-IMAGENET_MEAN = np.array([0.485, 0.456, 0.406]) * 255
-IMAGENET_STD = np.array([0.229, 0.224, 0.225]) * 255
-DEFAULT_CROP_RATIO = 224 / 256
-
-
-def get_sparsity(model: nn.Module) -> float:
-    """Calculate the sparsity of the model.
-
-    Args:
-        model (nn.Module): The model to calculate sparsity for.
-
-    Returns:
-        float: The sparsity of the model.
-    """
-    nz = 0
-    total = 0
-    for n, m in model.named_modules():
-        if isinstance(m, (ConvMask, Conv1dMask)):
-            nz += m.mask.sum()
-            total += m.mask.numel()
-
-    return nz / total
-
-
 class PruningStuff:
     """Class to handle pruning-related functionalities."""
-
+    
     def __init__(self, model: Optional[nn.Module] = None) -> None:
         """Initialize the PruningStuff class.
 
@@ -59,59 +37,53 @@ class PruningStuff:
             model (nn.Module, optional): The model to prune. Default is None.
                                          If no model is provided, then one is automatically set based on configuration.
         """
-        self.this_device = "cuda"
+        self.console = Console()
+        self.this_device = "cuda:0"
         self.config = get_current_config()
+        self.dataset_name = self.config['dataset.dataset_name']
+        self.distributed = self.config['dist_params.distributed']
+        if self.distributed:
+            self.rank = dist.get_rank()
 
-        if self.config['dataset.dataset_name'] == 'ImageNet':
-            self.loaders = imagenet(distributed=False, this_device='cuda', batch_size=512)
-            self.train_loader = self.loaders.train_loader
-        elif 'CIFAR' in self.config['dataset.dataset_name']:
-            if torch.cuda.device_count() == 1:
-                self.train_loader = CifarLoader(path='./cifar10', batch_size=512, train=True, aug={'flip' : True, 'translate' : 2}, altflip=True, dataset=self.config['dataset.dataset_name'])
-            else:
-                self.loaders = CIFARLoader(distributed=False)
-                self.train_loader = self.loaders.train_loader
+        if self.dataset_name.lower().startswith('cifar'):
+            self.loaders = AirbenchLoaders()
+        else:
+            self.batch_size = self.config['dataset.batch_size']
+            self.loaders = imagenet(distributed=False, this_device='cuda:0', batch_size=self.batch_size*torch.cuda.device_count())
+        
+        self.train_loader = self.loaders.train_loader
+
         if model is None:
+            if self.distributed:
+                if self.rank == 0:
+                    self.console.print(Panel("[bold dark_orange] Starting from scratch [/bold dark_orange]", border_style="dark_orange", expand=False))
+            else:
+                self.console.print(Panel("[bold dark_orange] Starting from scratch [/bold dark_orange]", border_style="dark_orange", expand=False))
             self.model = self.acquire_model()
         else:
+            if self.distributed:
+                if self.rank == 0:
+                    self.console.print(Panel("[bold plum1]Using provided model.[/bold plum1]", border_style="plum1", expand=False))
+            else:
+                self.console.print(Panel("[bold plum1]Using provided model.[/bold plum1]", border_style="plum1", expand=False))
             self.model = model
-        self.criterion = nn.CrossEntropyLoss()
-
-    @param("model_params.model_name")
-    @param("dataset.dataset_name")
-    def acquire_model(
-        self, model_name: str, dataset_name: str
-    ) -> nn.Module:
+        
+    def acquire_model(self) -> nn.Module:
         """Acquire the model based on the provided parameters.
-
-        Args:
-            model_name (str): Name of the model.
-            dataset_name (str): Name of the dataset.
-
         Returns:
             nn.Module: The acquired model.
         """
-        if dataset_name == 'CIFAR10':
-            num_classes = 10
-        elif dataset_name == 'CIFAR100':
-            num_classes = 100
-        elif dataset_name == 'ImageNet':
-            num_classes = 1000
-        
-        if model_name == "preresnet":
-            model = PreActResNet(block=PreActBlock, num_blocks=[2, 2, 2, 2])
-        else:
-            model = getattr(models, model_name)(num_classes=num_classes)
-
-        if "CIFAR" in dataset_name and "resnet" in model_name:
-            model.conv1 = nn.Conv2d(
-                3, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False
-            )
-            model.maxpool = nn.Identity()
-
-        replace_layers(model=model)
-
+        try:
+            model = TorchVisionModel()
+            if self.rank == 0:
+                self.console.print("[bold turquoise]Using Torchvision Model :)[/bold turquoise]")
+        except:
+            
+            model = CustomModel()
+            if self.rank == 0:
+                self.console.print("[bold turquoise]Using Custom Model :D[/bold turquoise]")
         model = model.to(self.this_device)
+
         return model
 
     @param("prune_params.er_method")
@@ -128,16 +100,7 @@ class PruningStuff:
             nn.Module: The pruned model.
         """
         
-        total = 0
-        nonzero = 0
-        for n, m in self.model.named_modules():
-            if isinstance(m, (Conv1dMask, ConvMask)):
-                total += m.mask.numel()
-                nonzero += m.mask.sum()
-        
-        print(f'density is {(nonzero / total) * 100:3f}')
-                
-        print('prior to pruning at init')
+        init_sparsity = self.model.get_overall_sparsity()
         er_method_name = f"prune_{er_method}"
         pruner_method = globals().get(er_method_name)
         if er_method in {"synflow", "snip"}:
@@ -146,7 +109,12 @@ class PruningStuff:
             pruner_method(self.model, er_init)
 
         print('We just pruned at init, woohoo!')
+        final_sparsity = self.model.get_overall_sparsity()
 
+        initial = Panel(f"[magenta]{init_sparsity:.4f}[/magenta]", title="Initial Sparsity")
+        final = Panel(f"[magenta]{final_sparsity:.4f}[/magenta]", title="Final Sparsity")
+        self.console.print(Columns([initial, final]))
+        self.console.print(f"[bold green]Pruning completed using {er_method} method![/bold green]")
 
     @param("prune_params.prune_method")
     def level_pruner(self, prune_method: str, density: float) -> None:
@@ -156,9 +124,7 @@ class PruningStuff:
             prune_method (str): Method of pruning.
             density (float): Desired density after pruning.
         """
-        print("---" * 20)
-        print(f"Density before pruning: {get_sparsity(self.model)}")
-        print("---" * 20)
+        init_sparsity = self.model.get_overall_sparsity()
 
         prune_method_name = f"prune_{prune_method}"
         pruner_method = globals().get(prune_method_name)
@@ -166,10 +132,12 @@ class PruningStuff:
             self.model = pruner_method(self.model, self.train_loader, density)
         else:
             pruner_method(self.model, density)
-
-        print("---" * 20)
-        print(f"Density after pruning: {get_sparsity(self.model)}")
-        print("---" * 20)
+        
+        final_sparsity = self.model.get_overall_sparsity()
+        initial = Panel(f"[magenta]{init_sparsity:.4f}[/magenta]", title="Initial Sparsity")
+        final = Panel(f"[cyan]{final_sparsity:.4f}[/cyan]", title="Final Sparsity")
+        self.console.print(Columns([initial, final]))
+        self.console.print(f"[bold green]Pruning completed using {prune_method} method![/bold green]")
 
     def load_from_ckpt(self, path: str) -> None:
         """Load the model from a checkpoint.
@@ -177,7 +145,7 @@ class PruningStuff:
         Args:
             path (str): Path to the checkpoint.
         """
-        print(f'Loading from {path}')
+        self.console.print(f"[bold blue]Loading from {path}[/bold blue]")
         self.model.load_state_dict(torch.load(path))
 
 
@@ -193,9 +161,8 @@ def prune_mag(model: nn.Module, density: float) -> nn.Module:
     """
     score_list = {}
 
-
     for n, m in model.named_modules():
-        if isinstance(m, (ConvMask, Conv1dMask)):
+        if isinstance(m, (ConvMask, Conv1dMask, LinearMask)):
             score_list[n] = (m.mask.to(m.weight.device) * m.weight).detach().abs_()
 
     global_scores = torch.cat([torch.flatten(v) for v in score_list.values()])
@@ -203,21 +170,13 @@ def prune_mag(model: nn.Module, density: float) -> nn.Module:
     threshold, _ = torch.kthvalue(global_scores, k)
 
     if not k < 1:
-        total_num = 0
-        total_den = 0
-
         for n, m in model.named_modules():
-            if isinstance(m, (ConvMask, Conv1dMask)):
+            if isinstance(m, (ConvMask, Conv1dMask, LinearMask)):
                 score = score_list[n].to(m.weight.device)
                 zero = torch.tensor([0.0]).to(m.weight.device)
                 one = torch.tensor([1.0]).to(m.weight.device)
                 m.mask = torch.where(score <= threshold, zero, one)
-                total_num += (m.mask == 1).sum()
-                total_den += m.mask.numel()
-    print(
-        "Overall model density after magnitude pruning at current iteration = ",
-        (total_num / total_den).item(),
-    )
+
     return model
 
 
@@ -237,7 +196,7 @@ def prune_random_erk(model: nn.Module, density: float) -> nn.Module:
     score_list = {}
 
     for n, m in model.named_modules():
-        if isinstance(m, (ConvMask, Conv1dMask)):
+        if isinstance(m, (ConvMask, Conv1dMask, LinearMask)):
             score_list[n] = (
                 (
                     m.mask.to(m.weight.device)
@@ -258,11 +217,9 @@ def prune_random_erk(model: nn.Module, density: float) -> nn.Module:
     print("Factor: ", C)
     sparsity_list = [torch.clamp(C * s, 0, 1) for s in sparsity_list]
 
-    total_num = 0
-    total_den = 0
     cnt = 0
     for n, m in model.named_modules():
-        if isinstance(m, (ConvMask, Conv1dMask)):
+        if isinstance(m, (ConvMask, Conv1dMask, LinearMask)):
             global_scores = torch.flatten(score_list[n])
             k = int((1 - sparsity_list[cnt]) * global_scores.numel())
             if k == 0:
@@ -275,14 +232,8 @@ def prune_random_erk(model: nn.Module, density: float) -> nn.Module:
             zero = torch.tensor([0.0]).to(m.weight.device)
             one = torch.tensor([1.0]).to(m.weight.device)
             m.mask = torch.where(score <= threshold, zero, one)
-            total_num += (m.mask == 1).sum()
-            total_den += m.mask.numel()
             cnt += 1
 
-    print(
-        "Overall model density after random global (ERK) pruning at current iteration = ",
-        total_num / total_den,
-    )
     return model
 
 @param('experiment_params.training_precision')
@@ -319,7 +270,7 @@ def prune_snip(model: nn.Module, trainloader: Any, density: float) -> nn.Module:
 
     score_list = {}
     for n, m in model.named_modules():
-        if isinstance(m, (ConvMask, Conv1dMask)):
+        if isinstance(m, (ConvMask, Conv1dMask, LinearMask)):
             score_list[n] = (
                 (m.weight.grad * m.weight * m.mask.to(m.weight.device)).detach().abs_()
             )
@@ -329,23 +280,14 @@ def prune_snip(model: nn.Module, trainloader: Any, density: float) -> nn.Module:
     threshold, _ = torch.kthvalue(global_scores, k)
 
     if not k < 1:
-        total_num = 0
-        total_den = 0
         for n, m in model.named_modules():
-            if isinstance(m, (ConvMask, Conv1dMask)):
+            if isinstance(m, (ConvMask, Conv1dMask, LinearMask)):
                 score = score_list[n].to(m.weight.device)
                 zero = torch.tensor([0.0]).to(m.weight.device)
                 one = torch.tensor([1.0]).to(m.weight.device)
                 m.mask = torch.where(score <= threshold, zero, one)
-                total_num += (m.mask == 1).sum()
-                total_den += m.mask.numel()
 
-    print(
-        "Overall model density after snip pruning at current iteration = ",
-        total_num / total_den,
-    )
     return model
-
 
 def prune_synflow(model: nn.Module, trainloader: Any, density: float) -> nn.Module:
     """SynFlow method pruning of the model.
@@ -401,7 +343,7 @@ def prune_synflow(model: nn.Module, trainloader: Any, density: float) -> nn.Modu
 
     score_list = {}
     for n, m in model.named_modules():
-        if isinstance(m, (ConvMask, Conv1dMask)):
+        if isinstance(m, (ConvMask, Conv1dMask, LinearMask)):
             score_list[n] = (
                 (m.mask.to(m.weight.device) * m.weight.grad * m.weight).detach().abs_()
             )
@@ -414,23 +356,14 @@ def prune_synflow(model: nn.Module, trainloader: Any, density: float) -> nn.Modu
     threshold, _ = torch.kthvalue(global_scores, k)
 
     if not k < 1:
-        total_num = 0
-        total_den = 0
         for n, m in model.named_modules():
-            if isinstance(m, (ConvMask, Conv1dMask)):
+            if isinstance(m, (ConvMask, Conv1dMask, LinearMask)):
                 score = score_list[n].to(m.weight.device)
                 zero = torch.tensor([0.0]).to(m.weight.device)
                 one = torch.tensor([1.0]).to(m.weight.device)
                 m.mask = torch.where(score <= threshold, zero, one)
-                total_num += (m.mask == 1).sum()
-                total_den += m.mask.numel()
 
-    print(
-        "Overall model density after synflow pruning at current iteration = ",
-        total_num / total_den,
-    )
     return model
-
 
 def prune_random_balanced(model: nn.Module, density: float) -> nn.Module:
     """Random balanced pruning of the model.
@@ -446,7 +379,7 @@ def prune_random_balanced(model: nn.Module, density: float) -> nn.Module:
     l = 0
     sparsity_list = []
     for n, m in model.named_modules():
-        if isinstance(m, (ConvMask, Conv1dMask)):
+        if isinstance(m, (ConvMask, Conv1dMask, LinearMask)):
             total_params += m.weight.numel()
             l += 1
     L = l
@@ -454,7 +387,7 @@ def prune_random_balanced(model: nn.Module, density: float) -> nn.Module:
     score_list = {}
     l = 0
     for n, m in model.named_modules():
-        if isinstance(m, (ConvMask, Conv1dMask)):
+        if isinstance(m, (ConvMask, Conv1dMask, LinearMask)):
             score_list[n] = (
                 (
                     m.mask.to(m.weight.device)
@@ -473,11 +406,9 @@ def prune_random_balanced(model: nn.Module, density: float) -> nn.Module:
                 X = X + diff / (L - l)
             l += 1
 
-    total_num = 0
-    total_den = 0
     cnt = 0
     for n, m in model.named_modules():
-        if isinstance(m, (ConvMask, Conv1dMask)):
+        if isinstance(m, (ConvMask, Conv1dMask, LinearMask)):
             global_scores = torch.flatten(score_list[n])
             k = int((1 - sparsity_list[cnt]) * global_scores.numel())
             if k == 0:
@@ -490,14 +421,9 @@ def prune_random_balanced(model: nn.Module, density: float) -> nn.Module:
             zero = torch.tensor([0.0]).to(m.weight.device)
             one = torch.tensor([1.0]).to(m.weight.device)
             m.mask = torch.where(score <= threshold, zero, one)
-            total_num += (m.mask == 1).sum()
-            total_den += m.mask.numel()
+
             cnt += 1
 
-    print(
-        "Overall model density after random global (balanced) pruning at current iteration = ",
-        total_num / total_den,
-    )
     return model
 
 
@@ -512,7 +438,7 @@ def prune_er_erk(model: nn.Module, er_sparse_init: float) -> None:
     num_params_list = []
     total_params = 0
     for n, m in model.named_modules():
-        if isinstance(m, (ConvMask, Conv1dMask)):
+        if isinstance(m, (ConvMask, Conv1dMask, LinearMask)):
             sparsity_list.append(torch.tensor(m.weight.shape).sum() / m.weight.numel())
             num_params_list.append(m.weight.numel())
             total_params += m.weight.numel()
@@ -525,10 +451,9 @@ def prune_er_erk(model: nn.Module, er_sparse_init: float) -> None:
     sparsity_list = [torch.clamp(C * s, 0, 1) for s in sparsity_list]
     l = 0
     for n, m in model.named_modules():
-        if isinstance(m, (ConvMask, Conv1dMask)):
+        if isinstance(m, (ConvMask, Conv1dMask, LinearMask)):
             m.set_er_mask(sparsity_list[l])
             l += 1
-    print(sparsity_list)
 
 
 def prune_er_balanced(model: nn.Module, er_sparse_init: float) -> None:
@@ -542,14 +467,14 @@ def prune_er_balanced(model: nn.Module, er_sparse_init: float) -> None:
     l = 0
     sparsity_list = []
     for n, m in model.named_modules():
-        if isinstance(m, (ConvMask, Conv1dMask)):
+        if isinstance(m, (ConvMask, Conv1dMask, LinearMask)):
             total_params += m.weight.numel()
             l += 1
     L = l
     X = er_sparse_init * total_params / l
     l = 0
     for n, m in model.named_modules():
-        if isinstance(m, (ConvMask, Conv1dMask)):
+        if isinstance(m, (ConvMask, Conv1dMask, LinearMask)):
             if X / m.weight.numel() < 1.0:
                 sparsity_list.append(X / m.weight.numel())
             else:
@@ -561,7 +486,6 @@ def prune_er_balanced(model: nn.Module, er_sparse_init: float) -> None:
 
     l = 0
     for n, m in model.named_modules():
-        if isinstance(m, (ConvMask, Conv1dMask)):
+        if isinstance(m, (ConvMask, Conv1dMask, LinearMask)):
             m.set_er_mask(sparsity_list[l])
             l += 1
-    print(sparsity_list)

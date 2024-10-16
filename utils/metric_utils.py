@@ -54,13 +54,6 @@ def test(model):
 @param('prune_params.er_method')
 @param('prune_params.prune_method')
 def compute_perturbation(er_method, prune_method, model, density, perturbation_table, level):
-    ## print sparsity initially
-    ## print test accuracy
-    ## prune
-    ## print sparsity after pruning
-    ## print test accuracy after pruning
-    ## compute change in accuracy
-
     is_iterative = (prune_method != 'just dont') and (er_method == 'just dont') 
     if is_iterative:
         pruning_harness = PruningStuff(model=model)
@@ -122,7 +115,7 @@ class LinearModeConnectivity:
         model.load_state_dict(torch.load(os.path.join(self.expt_path, 'checkpoints', f'model_level_{level}.pt')))
 
         for m in model.modules():
-            if isinstance(m, (ConvMask, Conv1dMask)):
+            if isinstance(m, (ConvMask, Conv1dMask, LinearMask)):
                 m.weight.data *= m.mask
         
         return model.state_dict()

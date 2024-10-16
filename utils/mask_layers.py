@@ -3,10 +3,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from fastargs import get_current_config
-from fastargs.decorators import param
 
 get_current_config()
-
 
 class ConvMask(nn.Conv2d):
     """
@@ -127,52 +125,3 @@ class Conv1dMask(nn.Conv1d):
             p (float): Probability for Bernoulli distribution.
         """
         self.mask = torch.zeros_like(self.weight).bernoulli_(p)
-
-@param('model_params.conv_type')
-def replace_layers(conv_type: str, model: nn.Module) -> nn.Module:
-    """
-    Replaces nn.Linear and nn.Conv2d layers in the model with corresponding masked layers.
-    Skips layers which are part of the shortcut connections.
-
-    Args:
-        conv_type (str): The type of masked layer to use (e.g., 'ConvMask').
-        model (nn.Module): The model in which to replace layers.
-
-    Returns:
-        nn.Module: The model with replaced layers.
-    """
-    layers_to_replace = []
-
-    conv_layer_of_type = globals().get(conv_type)
-
-    for name, layer in model.named_modules():
-        if "downsample" in name:
-            continue
-        if isinstance(layer, (nn.Linear, nn.Conv2d)):
-            layers_to_replace.append((name, layer))
-
-    for name, layer in layers_to_replace:
-        parts = name.split(".")
-        parent_module = model
-        for part in parts[:-1]:
-            parent_module = getattr(parent_module, part)
-
-        if isinstance(layer, nn.Linear):
-            in_features = layer.in_features
-            out_features = layer.out_features
-            bias = layer.bias is not None
-
-            conv_layer = Conv1dMask(in_features, out_features, bias)
-            setattr(parent_module, parts[-1], conv_layer)
-        elif isinstance(layer, nn.Conv2d):
-            conv_mask_layer = conv_layer_of_type(
-                in_channels=layer.in_channels,
-                out_channels=layer.out_channels,
-                kernel_size=layer.kernel_size,
-                stride=layer.stride,
-                padding=layer.padding,
-                bias=layer.bias is not None,
-            )
-            setattr(parent_module, parts[-1], conv_mask_layer)
-
-    return model

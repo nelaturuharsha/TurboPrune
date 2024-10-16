@@ -1,0 +1,32 @@
+model_params:
+  mask_layer_type: LinearMask 
+  model_name: local_deit_small_patch16_224 
+dataset:
+  dataset_name: ImageNet
+  batch_size: 128 
+  num_workers: 32
+  data_root_dir: ./experiments
+prune_params:
+  er_method: er_erk
+  er_init: 0.2
+  target_sparsity: 0.999
+experiment_params:
+  base_dir: ./experiments
+  seed: 0
+  training_type: lrr 
+  training_precision: bfloat16
+  use_compile: false
+optimizer:
+  lr: 0.2
+  scheduler_type: TriangularSchedule
+  weight_decay: 1e-4
+  momentum: 0.9
+  peak_lr: 1
+cyclic_training:
+  num_cycles: 1
+  total_epoch_budget: 90
+  strategy: constant
+dist_params:
+  distributed: true
+wandb_params:
+  project_name: imagenet_lrr

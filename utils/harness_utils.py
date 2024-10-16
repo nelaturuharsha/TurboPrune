@@ -1,19 +1,28 @@
 import torch
 import os
 import prettytable
-from utils.conv_type import ConvMask, Conv1dMask
+from typing import Any, Dict, Optional, Tuple 
+
+from utils.mask_layers import ConvMask, Conv1dMask, LinearMask
 from datetime import datetime
 import uuid
 
 import numpy as np
 import random
 import yaml
+import pandas as pd
 
 from fastargs.decorators import param
-from typing import Any, Dict, Optional, Tuple 
-
 from fastargs import get_current_config
 
+from rich.console import Console
+from rich.panel import Panel
+from rich.tree import Tree
+from rich.layout import Layout
+
+import wandb
+
+from argparse import ArgumentParser
 
 def reset_weights(
     expt_dir: str, model: torch.nn.Module, training_type: str
@@ -140,17 +149,15 @@ def print_sparsity_info(model: torch.nn.Module, verbose: bool = True) -> float:
     my_table.field_names = ["Layer Name", "Layer Sparsity", "Density", "Non-zero/Total"]
     total_params = 0
     total_params_kept = 0
-    
     for name, layer in model.named_modules():
-        if isinstance(layer, (ConvMask, Conv1dMask)):
+        if isinstance(layer, (ConvMask, Conv1dMask, LinearMask)):
             weight_mask = layer.mask
             sparsity, remaining, total = compute_sparsity(weight_mask)
             my_table.add_row([name, sparsity, 1 - sparsity, f"{remaining}/{total}"])
             total_params += total
             total_params_kept += remaining
-
     overall_sparsity = 1 - (total_params_kept / total_params)
-
+    
     if verbose:
         print(my_table)
         print("-----------")
@@ -182,12 +189,14 @@ def gen_expt_dir(
     prune_method = config['prune_params.prune_method']
     er_method = config['prune_params.er_method']
 
-    if prune_method != 'just dont' and er_method == 'just dont':
-        prefix = f"seed_{config['experiment_params.seed']}_{prune_method}_rate_{config['prune_params.prune_rate']}_budget_{config['cyclic_training.total_epoch_budget']}_cycles_{config['cyclic_training.num_cycles']}_strat_{config['cyclic_training.strategy']}"
-    elif prune_method == 'just dont' and er_method != 'just dont':
-        prefix =  f"seed_{config['experiment_params.seed']}_{er_method}_rate_{1-config['prune_params.er_init']}_budget_{config['cyclic_training.total_epoch_budget']}_cycles_{config['cyclic_training.num_cycles']}_strat_{config['cyclic_training.strategy']}"
+    common_prefix = f"{config['dataset.dataset_name']}_{config['experiment_params.training_type']}_seed_{config['experiment_params.seed']}_budget_{config['cyclic_training.total_epoch_budget']}_cycles_{config['cyclic_training.num_cycles']}_strat_{config['cyclic_training.strategy']}"
+
+    if prune_method != 'just dont':
+        prefix = f"{common_prefix}_{prune_method}_rate_{config['prune_params.prune_rate']}"
+    elif er_method != 'just dont':
+        prefix = f"{common_prefix}_{er_method}_rate_{1-config['prune_params.er_init']}"
     else:
-        prefix = f"seed_{config['experiment_params.seed']}_{prune_method}_{config['prune_params.prune_rate']}_{er_method}_rate_{1-config['prune_params.er_init']}_budget_{config['cyclic_training.total_epoch_budget']}_cycles_{config['cyclic_training.num_cycles']}_strat_{config['cyclic_training.strategy']}"
+        prefix = f"{common_prefix}_{prune_method}_{config['prune_params.prune_rate']}_{er_method}_rate_{1-config['prune_params.er_init']}"
     
     if resume_level != 0 and resume_expt_name:
         expt_dir = os.path.join(base_dir, resume_expt_name)
@@ -298,27 +307,22 @@ def generate_epoch_schedule(min_epochs, max_epochs, num_cycles, strategy):
     """
     
     if strategy == 'linear_decrease':
-        # Linearly decreasing epochs
         step = (max_epochs - min_epochs) / (num_cycles - 1)
         epochs = [int(max_epochs - step * i) for i in range(num_cycles)]
 
     elif strategy == 'linear_increase':
-        # Linearly increasing epochs
         step = (max_epochs - min_epochs) / (num_cycles - 1)
         epochs = [int(min_epochs + step * i) for i in range(num_cycles)]
 
     elif strategy == 'exponential_decrease':
-        # Exponentially decreasing epochs
         factor = (min_epochs / max_epochs) ** (1 / (num_cycles - 1))
         epochs = [int(max_epochs * (factor ** i)) for i in range(num_cycles)]
 
     elif strategy == 'exponential_increase':
-        # Exponentially increasing epochs
         factor = (max_epochs / min_epochs) ** (1 / (num_cycles - 1))
         epochs = [int(min_epochs * (factor ** i)) for i in range(num_cycles)]
 
     elif strategy == 'cyclic_peak':
-        # Cyclic pattern with peak epochs in the middle
         mid_point = num_cycles // 2
         increase_step = (max_epochs - min_epochs) / mid_point
         decrease_step = (max_epochs - min_epochs) / (num_cycles - mid_point - 1)
@@ -361,29 +365,24 @@ def generate_budgeted_schedule(total_epoch_budget, num_cycles, strategy):
     """
     
     if strategy == 'linear_decrease':
-        # Linearly decreasing epochs
         step = total_epoch_budget / (num_cycles * (num_cycles + 1) / 2)
         epochs = [int(step * (num_cycles - i)) for i in range(num_cycles)]
 
     elif strategy == 'linear_increase':
-        # Linearly increasing epochs
         step = total_epoch_budget / (num_cycles * (num_cycles + 1) / 2)
         epochs = [int(step * (i + 1)) for i in range(num_cycles)]
 
     elif strategy == 'exponential_decrease':
-        # Exponentially decreasing epochs
         factor = 0.5 ** (1 / (num_cycles - 1))
         total_factor = sum(factor ** i for i in range(num_cycles))
         epochs = [int(total_epoch_budget * (factor ** i) / total_factor) for i in range(num_cycles)]
 
     elif strategy == 'exponential_increase':
-        # Exponentially increasing epochs
         factor = 2 ** (1 / (num_cycles - 1))
         total_factor = sum(factor ** i for i in range(num_cycles))
         epochs = [int(total_epoch_budget * (factor ** i) / total_factor) for i in range(num_cycles)]
 
     elif strategy == 'cyclic_peak':
-        # Cyclic pattern with peak epochs in the middle
         mid_point = num_cycles // 2
         increase_step = total_epoch_budget / (mid_point * (mid_point + 1) / 2)
         decrease_step = total_epoch_budget / ((num_cycles - mid_point) * (num_cycles - mid_point + 1) / 2)
@@ -391,7 +390,6 @@ def generate_budgeted_schedule(total_epoch_budget, num_cycles, strategy):
         epochs += [int(decrease_step * (num_cycles - i)) for i in range(mid_point, num_cycles)]
 
     elif strategy == 'alternating':
-        # Alternating high and low epochs
         high = total_epoch_budget // (num_cycles // 2 + num_cycles % 2)
         low = total_epoch_budget // (2 * (num_cycles // 2 + num_cycles % 2))
         epochs = [high if i % 2 == 0 else low for i in range(num_cycles)]
@@ -406,14 +404,11 @@ def generate_budgeted_schedule(total_epoch_budget, num_cycles, strategy):
     else:
         epochs = [total_epoch_budget // num_cycles for _ in range(num_cycles)]
 
-    # Ensure the total does not exceed the total_epoch_budget
     current_total = sum(epochs)
     if current_total > total_epoch_budget:
-        # Proportional scaling to fit within the budget
         scaling_factor = total_epoch_budget / current_total
         epochs = [int(epoch * scaling_factor) for epoch in epochs]
 
-        # Adjust to compensate for rounding errors
         current_total = sum(epochs)
         excess = current_total - total_epoch_budget
         
@@ -426,6 +421,86 @@ def generate_budgeted_schedule(total_epoch_budget, num_cycles, strategy):
             for i in range(remainder):
                 epochs[i] -= 1
     
-    print(sum(epochs))
  
     return epochs
+
+def save_metrics_and_update_summary(console, model, expt_dir, prefix, level, level_metrics, num_cycles, epoch_schedule):
+    metrics_path = os.path.join(expt_dir, "metrics", f"level_{level}_metrics.csv")
+    pd.DataFrame(level_metrics).to_csv(metrics_path, index=False)
+    console.log(f"[bold cyan]Saved metrics for level {level}[/bold cyan]")
+
+    summary_path = os.path.join(expt_dir, "metrics", f"{prefix}_overall_summary.csv")
+    sparsity = model.get_overall_sparsity()
+    new_data = {
+        "level": [level],
+        "sparsity": [round(sparsity, 4)],
+        "num_cycles": [num_cycles],
+        "max_test_acc": [round(max(level_metrics["test_acc"]), 4)],
+        "final_test_acc": [round(level_metrics["test_acc"][-1], 4)],
+        "epoch_schedule": ['-'.join(map(str, epoch_schedule))]
+    }
+    df = pd.DataFrame(new_data)
+    if os.path.exists(summary_path):
+        df.to_csv(summary_path, mode='a', header=False, index=False)
+    else:
+        df.to_csv(summary_path, index=False)
+    console.log(f"[bold cyan]Updated overall summary for level {level}[/bold cyan]")
+
+    wandb.log(  {
+        "sparsity": new_data["sparsity"][0],
+        "max_test_acc": new_data["max_test_acc"][0]
+    })
+
+def display_training_info(cycle_info, training_info, optimizer_info):
+    
+    console = Console()
+
+
+    hardware_tree = Tree("Training Harness Configuration")
+    for key, value in training_info.items():
+        hardware_tree.add(f"[bold cyan]{key.capitalize()}:[/bold cyan] [yellow]{value}[/yellow]")
+    hardware_panel = Panel(hardware_tree, title="Training Configuration", border_style="cyan")
+
+    schedule_tree = Tree("Training Schedule")
+    schedule_tree.add(f"[bold cyan]Number of Cycles:[/bold cyan] [yellow]{cycle_info['Number of Cycles']}[/yellow]")
+    schedule_tree.add(f"[bold cyan]Epochs per Cycle:[/bold cyan] [yellow]{', '.join(map(str, cycle_info['Epochs per Cycle']))}[/yellow]")
+    schedule_tree.add(f"[bold cyan]Total Training Length:[/bold cyan] [yellow]{cycle_info['Total Training Length']}[/yellow]")
+    schedule_panel = Panel(schedule_tree, title="Overall Training Schedule", border_style="cyan")
+
+    cycle_tree = Tree(f"Training Cycle {cycle_info['Training Cycle']}")
+    cycle_tree.add(f"[bold cyan]Epochs this cycle:[/bold cyan] [yellow]{cycle_info['Epochs this cycle']}[/yellow]")
+    cycle_tree.add(f"[bold cyan]Total epochs so far:[/bold cyan] [yellow]{cycle_info['Total epochs so far']}[/yellow]")
+    cycle_tree.add(f"[bold cyan]Current Sparsity:[/bold cyan] [yellow]{cycle_info['Current Sparsity']}[/yellow]")
+    cycle_panel = Panel(cycle_tree, title="Current Cycle Information", border_style="cyan")
+
+    optimizer_tree = Tree("Optimizer Configuration")
+    for key, value in optimizer_info.items():
+        optimizer_tree.add(f"[bold cyan]{key}:[/bold cyan] [yellow]{value}[/yellow]")
+    optimizer_panel = Panel(optimizer_tree, title="Optimizer Details", border_style="cyan")
+
+    experiment_config = Layout()
+
+    experiment_config.split(
+        Layout(hardware_panel, name="hardware", ratio=1),
+        Layout(name="bottom_row", ratio=3)
+    )
+
+    experiment_config["bottom_row"].split_row(
+        Layout(schedule_panel, name="schedule"),
+        Layout(cycle_panel, name="cycle"),
+        Layout(optimizer_panel, name="optimizer")
+    )
+
+    console.print("\n") 
+    console.print(experiment_config)
+    console.print("\n") 
+
+def save_model(model, save_path, distributed: bool):
+    if hasattr(model, '_orig_mod') and not distributed:
+        torch.save(model._orig_mod.model.state_dict(), save_path) 
+    elif hasattr(model, '_orig_mod') and distributed:
+        torch.save(model._orig_mod.module.state_dict(), save_path)
+    elif distributed:
+        torch.save(model.module.model.state_dict(), save_path)
+    else:
+        torch.save(model.state_dict(), save_path)
