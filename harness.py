@@ -256,7 +256,7 @@ class Harness:
                     torch.save(self.optimizer.state_dict(), os.path.join(self.expt_dir, "artifacts", "optimizer_init.pt"))
                 elif level != 0:
                     self.console.print(f"[bold cyan]Loading optimizer state for level {level}, cycle {cycle}[/bold cyan]")
-                    self.optimizer.load_state_dict(torch.load(os.path.join(self.expt_dir, "artifacts", "optimizer_init.pt", weights_only=True)))
+                    self.optimizer.load_state_dict(torch.load(os.path.join(self.expt_dir, "artifacts", "optimizer_init.pt")))
 
             for epoch in range(epoch_schedule[cycle]):
                 
@@ -377,6 +377,7 @@ def main():
                 prune_harness.level_pruner(density=densities[level])
                 sparsity = prune_harness.model.get_overall_sparsity()
                 panel = Panel(f"[bold green]Model sparsity after pruning: {sparsity:.4f}[/bold green]", title="Sparsity", border_style="green", expand=False)
+                prune_harness.model = reset_weights(expt_dir=expt_dir, model=prune_harness.model)
                 console.print(panel)
             elif not is_iterative:
                 console.print('[bold cyan]Pruning at initialization[/bold cyan]')

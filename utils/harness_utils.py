@@ -24,9 +24,10 @@ import wandb
 
 from argparse import ArgumentParser
 
+@param('experiment_params.training_type')
 def reset_weights(
-    expt_dir: str, model: torch.nn.Module, training_type: str
-) -> torch.nn.Module:
+        training_type: str, expt_dir: str, model: torch.nn.Module
+        ) -> torch.nn.Module:
     """Reset (or don't) the weight to a given checkpoint based on the provided training type.
 
     Args:

@@ -1,0 +1,20 @@
+/var/spool/slurm/d/job281994/slurm_script: line 4: pip: command not found
+/var/spool/slurm/d/job281994/slurm_script: line 5: pip: command not found
+/var/spool/slurm/d/job281994/slurm_script: line 6: pip: command not found
+/var/spool/slurm/d/job281994/slurm_script: line 7: pip: command not found
+/var/spool/slurm/d/job281994/slurm_script: line 8: pip: command not found
+/var/spool/slurm/d/job281994/slurm_script: line 9: pip: command not found
+/var/spool/slurm/d/job281994/slurm_script: line 10: pip: command not found
+/var/spool/slurm/d/job281994/slurm_script: line 11: pip: command not found
+/var/spool/slurm/d/job281994/slurm_script: line 12: pip: command not found
+/var/spool/slurm/d/job281994/slurm_script: line 13: pip: command not found
+/var/spool/slurm/d/job281994/slurm_script: line 14: pip: command not found
+/var/spool/slurm/d/job281994/slurm_script: line 16: pip: command not found
+/var/spool/slurm/d/job281994/slurm_script: line 17: pip: command not found
+/var/spool/slurm/d/job281994/slurm_script: line 18: pip: command not found
+/var/spool/slurm/d/job281994/slurm_script: line 22: wandb: command not found
+Resuming sweep with path for wandb agent: sree_harsha/baseline_pruning/rqjaxicy
+/var/spool/slurm/d/job281994/slurm_script: line 38: wandb: command not found
+/var/spool/slurm/d/job281994/slurm_script: line 38: wandb: command not found
+/var/spool/slurm/d/job281994/slurm_script: line 38: wandb: command not found
+/var/spool/slurm/d/job281994/slurm_script: line 38: wandb: command not found
