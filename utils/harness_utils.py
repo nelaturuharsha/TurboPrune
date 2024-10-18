@@ -189,7 +189,7 @@ def gen_expt_dir(
     prune_method = config['prune_params.prune_method']
     er_method = config['prune_params.er_method']
 
-    common_prefix = f"{config['dataset.dataset_name']}_{config['experiment_params.training_type']}_seed_{config['experiment_params.seed']}_budget_{config['cyclic_training.total_epoch_budget']}_cycles_{config['cyclic_training.num_cycles']}_strat_{config['cyclic_training.strategy']}"
+    common_prefix = f"{config['dataset.dataset_name']}_{config['model_params.model_name']}_{config['experiment_params.training_type']}_seed_{config['experiment_params.seed']}_budget_{config['cyclic_training.total_epoch_budget']}_cycles_{config['cyclic_training.num_cycles']}_strat_{config['cyclic_training.strategy']}"
 
     if prune_method != 'just dont':
         prefix = f"{common_prefix}_{prune_method}_rate_{config['prune_params.prune_rate']}"

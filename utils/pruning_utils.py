@@ -54,16 +54,14 @@ class PruningStuff:
         self.train_loader = self.loaders.train_loader
 
         if model is None:
-            if self.distributed:
-                if self.rank == 0:
-                    self.console.print(Panel("[bold dark_orange] Starting from scratch [/bold dark_orange]", border_style="dark_orange", expand=False))
+            if self.distributed and self.rank == 0:
+                self.console.print(Panel("[bold dark_orange] Starting from scratch [/bold dark_orange]", border_style="dark_orange", expand=False))
             else:
                 self.console.print(Panel("[bold dark_orange] Starting from scratch [/bold dark_orange]", border_style="dark_orange", expand=False))
             self.model = self.acquire_model()
         else:
-            if self.distributed:
-                if self.rank == 0:
-                    self.console.print(Panel("[bold plum1]Using provided model.[/bold plum1]", border_style="plum1", expand=False))
+            if self.distributed and self.rank == 0:
+                self.console.print(Panel("[bold plum1]Using provided model.[/bold plum1]", border_style="plum1", expand=False))
             else:
                 self.console.print(Panel("[bold plum1]Using provided model.[/bold plum1]", border_style="plum1", expand=False))
             self.model = model
@@ -75,12 +73,11 @@ class PruningStuff:
         """
         try:
             model = TorchVisionModel()
-            if self.rank == 0:
+            if self.distributed and self.rank == 0:
                 self.console.print("[bold turquoise]Using Torchvision Model :)[/bold turquoise]")
         except:
-            
             model = CustomModel()
-            if self.rank == 0:
+            if self.distributed and self.rank == 0:
                 self.console.print("[bold turquoise]Using Custom Model :D[/bold turquoise]")
         model = model.to(self.this_device)
 

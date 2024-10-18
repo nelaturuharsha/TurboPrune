@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torch.distributed as dist
 from typing import Type, List, Dict
 from torchvision import models
 from rich.console import Console
@@ -117,8 +116,7 @@ class TorchVisionModel(PruneModel):
     @param('dataset.dataset_name')
     def prepare(self, dataset_name: str):
         if hasattr(models, self.model_name):
-            if dist.get_rank() == 0:
-                print(f"Using {self.model_name} from torchvision.models")
+            print(f"Using {self.model_name} from torchvision.models")
             self.model = getattr(models, self.model_name)(weights=None)
         else:
             raise ValueError(f"Model {self.model_name} not found in torchvision.models.")

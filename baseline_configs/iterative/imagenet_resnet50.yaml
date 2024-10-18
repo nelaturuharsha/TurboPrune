@@ -27,4 +27,6 @@ cyclic_training:
   total_epoch_budget: 90
   strategy: constant
 wandb_params:
-  project_name: imagenet_lrr
+        project_name: baseline_experiments
+dist_params:
+  distributed: true

@@ -29,4 +29,4 @@ cyclic_training:
 dist_params:
   distributed: true
 wandb_params:
-  project_name: imagenet_lrr
+        project_name: baseline_experiments
