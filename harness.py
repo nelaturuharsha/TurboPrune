@@ -1,7 +1,14 @@
 ## pythonic imports
 import os
-
 from typing import Tuple
+from argparse import ArgumentParser
+import tqdm
+
+## rich stuff
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
+from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeRemainingColumn
 
 ## torch
 import torch
@@ -11,13 +18,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch import optim
 from torch.amp import autocast
 from torchmetrics import Accuracy
-
-## file-based imports
-import utils.schedulers as schedulers
-import utils.pruning_utils as pruning_utils
-from utils.harness_utils import *
-from utils.dataset import AirbenchLoaders, imagenet
-from utils.distributed_utils import broadcast_model, check_model_equality, broadcast_object, setup_distributed
+import torch._dynamo
 
 ## fastargs
 from fastargs import get_current_config
@@ -26,12 +27,18 @@ import schedulefree
 
 import wandb
 
-from rich.console import Console
-from rich.panel import Panel
-from rich.table import Table
-from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeRemainingColumn
+## file-based imports
+import utils.schedulers as schedulers
+import utils.pruning_utils as pruning_utils
+from utils.harness_utils import *
+from utils.dataset import AirbenchLoaders, imagenet
+from utils.distributed_utils import broadcast_model, check_model_equality, broadcast_object, setup_distributed
+
+torch.backends.cuda.matmul.allow_tf32 = True
+torch.backends.cudnn.allow_tf32 = True
 
 torch._dynamo.config.guard_nn_modules=True
+
 
 class Harness:
     """Harness class to handle training and evaluation.
@@ -45,7 +52,6 @@ class Harness:
     @param("experiment_params.use_compile")
     @param("dist_params.distributed")
     def __init__(self, dataset_name: str, use_compile: bool, distributed: bool, gpu_id: int, expt_dir: str, model: nn.Module) -> None:
-
         self.config = get_current_config()
         self.dataset_name = dataset_name.lower()
         self.use_compile = use_compile
@@ -71,8 +77,9 @@ class Harness:
         self.test_loader = self.loaders.test_loader
 
         self.model = model.to(self.this_device)
-        self.model = DDP(self.model, device_ids=[self.gpu_id]) if self.distributed else self.model
         self.model = torch.compile(self.model, mode='reduce-overhead') if self.use_compile else self.model
+        self.model = DDP(self.model, device_ids=[self.gpu_id]) if self.distributed else self.model
+
 
         self.prefix, self.expt_dir = expt_dir
         self.precision, self.use_amp = self.get_dtype_amp()
@@ -158,10 +165,8 @@ class Harness:
         Returns:
             (float, float): Training loss and accuracy.
         """
-
-        model = self.model
-        model.train()
-        train_loss = torch.tensor(0.0).to(self.this_device)
+        self.model.train()
+        train_loss = 0.0
         self.train_accuracy.reset()
 
         progress = Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"),
@@ -172,9 +177,11 @@ class Harness:
             task = progress.add_task(f"[cyan]Epoch {epoch}", total=len(self.train_loader))
 
             for inputs, targets in self.train_loader:
-                self.optimizer.zero_grad()
-                with autocast('cuda', dtype=self.precision, enabled = self.use_amp):
-                    outputs = model(inputs)
+                inputs, targets = inputs.to(self.this_device), targets.to(self.this_device)
+                
+                self.optimizer.zero_grad(set_to_none=True)
+                with autocast('cuda', dtype=self.precision, enabled=self.use_amp):
+                    outputs = self.model(inputs)
                     loss = self.criterion(outputs, targets)
                 loss.backward()
                 self.optimizer.step()
@@ -182,16 +189,19 @@ class Harness:
                 train_loss += loss.item()
                 self.train_accuracy.update(outputs, targets)
 
-                if (self.scheduler is not None) and (self.config['optimizer.scheduler_type'] != 'MultiStepLRWarmup'):
+                if self.scheduler is not None and self.config['optimizer.scheduler_type'] != 'MultiStepLRWarmup':
                     self.scheduler.step()
                 progress.update(task, advance=1)
-
+                
         if self.config["optimizer.scheduler_type"] == 'MultiStepLRWarmup':
             self.scheduler.step()
 
+        train_loss /= len(self.train_loader)
         if self.distributed:
-            dist.all_reduce(train_loss, op=dist.ReduceOp.AVG)
-        train_loss = train_loss.item() / len(self.train_loader)
+            train_loss_tensor = torch.tensor(train_loss).to(self.this_device)
+            dist.all_reduce(train_loss_tensor, op=dist.ReduceOp.AVG)
+            train_loss = train_loss_tensor.item()
+            del train_loss_tensor
 
         accuracy = self.train_accuracy.compute().item() * 100
 
@@ -203,31 +213,25 @@ class Harness:
         Returns:
             (float, float): Test loss and accuracy.
         """
-        model = self.model
-        model.eval()
-        test_loss = torch.tensor(0.0).to(self.this_device)
+        #model = self.model
+        self.model.eval()
+        test_loss = 0.0
         self.test_accuracy.reset()
 
-        progress = Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"),
-                            BarColumn(), TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-                            TextColumn("[cyan]{task.completed}/{task.total}"))
-        
-        with progress:
-            task = progress.add_task(f"[cyan]Testing", total=len(self.test_loader))
-            with torch.no_grad():
-                for inputs, targets in self.test_loader:
-                    with autocast('cuda', dtype=self.precision, enabled = self.use_amp):
-                        outputs = model(inputs.contiguous())
-                        loss = self.criterion(outputs, targets)
+        with torch.no_grad(), autocast('cuda', dtype=self.precision, enabled=self.use_amp):
+            for inputs, targets in self.test_loader:
+                outputs = self.model(inputs)
+                loss = self.criterion(outputs, targets)
+                test_loss += loss.item()
+                self.test_accuracy.update(outputs, targets)
 
-                    test_loss += loss.item()
-                    self.test_accuracy.update(outputs, targets)
-                    progress.update(task, advance=1)
-        
-        
         if self.distributed:
-            dist.all_reduce(test_loss, op=dist.ReduceOp.AVG)
-        test_loss = test_loss.item() / len(self.test_loader)
+            test_loss_tensor = torch.tensor(test_loss).to(self.this_device)
+            dist.all_reduce(test_loss_tensor, op=dist.ReduceOp.SUM)
+            test_loss = test_loss_tensor.item()
+            del test_loss_tensor
+
+        test_loss /= len(self.test_loader)
         accuracy = self.test_accuracy.compute().item() * 100
 
         return test_loss, accuracy
@@ -292,7 +296,7 @@ class Harness:
                     self.console.print("\n") 
                     self.console.print(self.metrics_table)
                     self.console.print("\n") 
-                    if level == 0 and training_type == "wr" and epoch == 9:
+                    if level == 0 and epoch == 9:
                         save_model(self.model, os.path.join(self.expt_dir, "checkpoints", "model_rewind.pt"), distributed=self.distributed)
                         torch.save(self.optimizer.state_dict(), os.path.join(self.expt_dir, "artifacts", "optimizer_rewind.pt"))
 
@@ -302,15 +306,14 @@ class Harness:
 
         if self.gpu_id == 0:
             model = self.model.module if self.distributed else self.model
-            save_metrics_and_update_summary(self.console, model, self.expt_dir, self.prefix, level, level_metrics, num_cycles, epoch_schedule)
 
-def initialize_config():
+def initialize_config(): 
     config = get_current_config()
     parser = ArgumentParser()
     config.augment_argparse(parser)
     config.collect_argparse_args(parser)
     config.validate(mode="stderr")
-    
+
     return config
 
 def main():
@@ -332,6 +335,7 @@ def main():
         console.print(f"[bold green]Training on {world_size} GPUs[/bold green]")
         wandb.init(project=config['wandb_params.project_name'])
         run_id = wandb.run.id
+        wandb.run.tags = wandb.run.tags + (config['dataset.dataset_name'].lower(),)
         prefix, expt_dir = gen_expt_dir()
         packaged = (prefix, expt_dir)
         save_config(expt_dir=expt_dir, config=config)

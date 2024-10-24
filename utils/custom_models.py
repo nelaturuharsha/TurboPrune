@@ -125,7 +125,7 @@ class TorchVisionModel(PruneModel):
             self._prepare_for_cifar(dataset_name.lower())
         
         self._replace_layers()
-
+        self.model = self.model.to(memory_format=torch.channels_last)
     def _prepare_for_cifar(self, dataset_name: str):
         num_classes = 10 if dataset_name == 'cifar10' else 100
         

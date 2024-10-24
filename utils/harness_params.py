@@ -72,10 +72,10 @@ def get_current_params() -> None:
         peak_lr=Param(float, "peak learning rate"),)
 
     Section("dist_params", "distributed parameters").params(
-        distributed=Param(bool, "use distributed training", default=False))
+        distributed=Param(bool, "use distributed training", default=''))
 
     Section('cyclic_training', 'parameters for cyclic training').params(
-        total_epoch_budget=Param(int, 'maximum number of epochs each level is trained for', required=True),
+        epochs_per_level=Param(int, 'maximum number of epochs each level is trained for', required=True),
         num_cycles=Param(int, "number of cycles used for cyclic training", default=1),
         strategy=Param(And(str, OneOf(['linear_increase', 'linear_decrease', 'exponential_decrease', 
                                       'exponential_increase', 'cyclic_peak', 'alternating', 'plateau', 'constant'])), default='constant'),

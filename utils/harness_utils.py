@@ -1,16 +1,17 @@
-import torch
 import os
-import prettytable
-from typing import Any, Dict, Optional, Tuple 
-
-from utils.mask_layers import ConvMask, Conv1dMask, LinearMask
-from datetime import datetime
 import uuid
+from datetime import datetime
+import prettytable
+import yaml
+from typing import Any, Dict, Optional, Tuple 
 
 import numpy as np
 import random
-import yaml
 import pandas as pd
+
+import torch
+
+from utils.mask_layers import ConvMask, Conv1dMask, LinearMask
 
 from fastargs.decorators import param
 from fastargs import get_current_config
@@ -21,8 +22,6 @@ from rich.tree import Tree
 from rich.layout import Layout
 
 import wandb
-
-from argparse import ArgumentParser
 
 @param('experiment_params.training_type')
 def reset_weights(
@@ -52,12 +51,14 @@ def reset_weights(
         print("probably LRR, aint nothing to do -- or if PaI, we aren't touching it any case.")
         return model
 
-    original_weights = dict(
-        filter(lambda v: v[0].endswith((".weight", ".bias")), original_dict.items())
-    )
-    model_dict = model.state_dict()
-    model_dict.update(original_weights)
-    model.load_state_dict(model_dict)
+    current_state_dict = model.model.state_dict()
+    
+    for name, param in original_dict.items():
+        if name in current_state_dict and current_state_dict[name].shape == param.shape and not name.endswith('mask'):
+            print(f'Restoring weights for {name}')
+            current_state_dict[name].copy_(param)
+    
+    model.model.load_state_dict(current_state_dict)
 
     return model
 
@@ -190,7 +191,7 @@ def gen_expt_dir(
     prune_method = config['prune_params.prune_method']
     er_method = config['prune_params.er_method']
 
-    common_prefix = f"{config['dataset.dataset_name']}_{config['model_params.model_name']}_{config['experiment_params.training_type']}_seed_{config['experiment_params.seed']}_budget_{config['cyclic_training.total_epoch_budget']}_cycles_{config['cyclic_training.num_cycles']}_strat_{config['cyclic_training.strategy']}"
+    common_prefix = f"{config['dataset.dataset_name']}_{config['model_params.model_name']}_{config['experiment_params.training_type']}_seed_{config['experiment_params.seed']}_budget_{config['cyclic_training.epochs_per_level']}_cycles_{config['cyclic_training.num_cycles']}_strat_{config['cyclic_training.strategy']}"
 
     if prune_method != 'just dont':
         prefix = f"{common_prefix}_{prune_method}_rate_{config['prune_params.prune_rate']}"
@@ -347,15 +348,15 @@ def generate_epoch_schedule(min_epochs, max_epochs, num_cycles, strategy):
 
     return epochs
 
-@param('cyclic_training.total_epoch_budget')
+@param('cyclic_training.epochs_per_level')
 @param('cyclic_training.num_cycles')
 @param('cyclic_training.strategy')
-def generate_budgeted_schedule(total_epoch_budget, num_cycles, strategy):
+def generate_budgeted_schedule(epochs_per_level, num_cycles, strategy):
     """
     Generates a schedule of epochs per cycle based on the given strategy and total epoch budget.
     
     Parameters:
-    - total_epoch_budget (int): Total number of epochs to be distributed across cycles.
+    - epochs_per_level (int): Total number of epochs to be distributed across cycles.
     - num_cycles (int): Number of cycles.
     - strategy (str): Strategy for epoch scheduling. Options are:
                       'linear_decrease', 'linear_increase', 'exponential_decrease',
@@ -366,52 +367,52 @@ def generate_budgeted_schedule(total_epoch_budget, num_cycles, strategy):
     """
     
     if strategy == 'linear_decrease':
-        step = total_epoch_budget / (num_cycles * (num_cycles + 1) / 2)
+        step = epochs_per_level / (num_cycles * (num_cycles + 1) / 2)
         epochs = [int(step * (num_cycles - i)) for i in range(num_cycles)]
 
     elif strategy == 'linear_increase':
-        step = total_epoch_budget / (num_cycles * (num_cycles + 1) / 2)
+        step = epochs_per_level / (num_cycles * (num_cycles + 1) / 2)
         epochs = [int(step * (i + 1)) for i in range(num_cycles)]
 
     elif strategy == 'exponential_decrease':
         factor = 0.5 ** (1 / (num_cycles - 1))
         total_factor = sum(factor ** i for i in range(num_cycles))
-        epochs = [int(total_epoch_budget * (factor ** i) / total_factor) for i in range(num_cycles)]
+        epochs = [int(epochs_per_level * (factor ** i) / total_factor) for i in range(num_cycles)]
 
     elif strategy == 'exponential_increase':
         factor = 2 ** (1 / (num_cycles - 1))
         total_factor = sum(factor ** i for i in range(num_cycles))
-        epochs = [int(total_epoch_budget * (factor ** i) / total_factor) for i in range(num_cycles)]
+        epochs = [int(epochs_per_level * (factor ** i) / total_factor) for i in range(num_cycles)]
 
     elif strategy == 'cyclic_peak':
         mid_point = num_cycles // 2
-        increase_step = total_epoch_budget / (mid_point * (mid_point + 1) / 2)
-        decrease_step = total_epoch_budget / ((num_cycles - mid_point) * (num_cycles - mid_point + 1) / 2)
+        increase_step = epochs_per_level / (mid_point * (mid_point + 1) / 2)
+        decrease_step = epochs_per_level / ((num_cycles - mid_point) * (num_cycles - mid_point + 1) / 2)
         epochs = [int(increase_step * (i + 1)) for i in range(mid_point)]
         epochs += [int(decrease_step * (num_cycles - i)) for i in range(mid_point, num_cycles)]
 
     elif strategy == 'alternating':
-        high = total_epoch_budget // (num_cycles // 2 + num_cycles % 2)
-        low = total_epoch_budget // (2 * (num_cycles // 2 + num_cycles % 2))
+        high = epochs_per_level // (num_cycles // 2 + num_cycles % 2)
+        low = epochs_per_level // (2 * (num_cycles // 2 + num_cycles % 2))
         epochs = [high if i % 2 == 0 else low for i in range(num_cycles)]
 
     elif strategy == 'plateau':
         increase_cycles = num_cycles // 2
         plateau_cycles = num_cycles - increase_cycles
-        increase_step = total_epoch_budget / (increase_cycles * (increase_cycles + 1) / 2)
+        increase_step = epochs_per_level / (increase_cycles * (increase_cycles + 1) / 2)
         epochs = [int(increase_step * (i + 1)) for i in range(increase_cycles)]
-        epochs += [total_epoch_budget // num_cycles for _ in range(plateau_cycles)]
+        epochs += [epochs_per_level // num_cycles for _ in range(plateau_cycles)]
 
     else:
-        epochs = [total_epoch_budget // num_cycles for _ in range(num_cycles)]
+        epochs = [epochs_per_level // num_cycles for _ in range(num_cycles)]
 
     current_total = sum(epochs)
-    if current_total > total_epoch_budget:
-        scaling_factor = total_epoch_budget / current_total
+    if current_total > epochs_per_level:
+        scaling_factor = epochs_per_level / current_total
         epochs = [int(epoch * scaling_factor) for epoch in epochs]
 
         current_total = sum(epochs)
-        excess = current_total - total_epoch_budget
+        excess = current_total - epochs_per_level
         
         if excess > 0:
             reduction_per_epoch = excess // len(epochs)
@@ -497,11 +498,14 @@ def display_training_info(cycle_info, training_info, optimizer_info):
     console.print("\n") 
 
 def save_model(model, save_path, distributed: bool):
-    if hasattr(model, '_orig_mod') and not distributed:
-        torch.save(model._orig_mod.model.state_dict(), save_path) 
-    elif hasattr(model, '_orig_mod') and distributed:
-        torch.save(model._orig_mod.module.state_dict(), save_path)
+    if distributed and hasattr(model, '_orig_mod'):
+        model_to_save = model._orig_mod.module.model
     elif distributed:
-        torch.save(model.module.model.state_dict(), save_path)
+        model_to_save = model.module.model
+    elif hasattr(model, '_orig_mod'):
+        model_to_save = model._orig_mod.model
     else:
-        torch.save(model.state_dict(), save_path)
+        model_to_save = model.model
+
+    torch.save(model_to_save.state_dict(), save_path)
+    print(f"Model saved to {save_path}")
