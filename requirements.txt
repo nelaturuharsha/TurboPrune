@@ -5,3 +5,10 @@ pyyaml
 tqdm
 torch
 torchvision
+airbench
+schedulefree
+pyhessian
+wandb
+torchmetrics
+rich
+timm
