@@ -14,7 +14,12 @@ from utils.harness_utils import *
 from utils.airbench_loader import CifarLoader
 from pyhessian import hessian
 
-get_current_config()
+
+from rich.table import Table
+from rich.console import Console
+import pandas as pd
+import os
+
 
 def test(model):
     """Evaluate the model on the test set.
@@ -36,7 +41,6 @@ def test(model):
     tloader = tqdm.tqdm(test_loader, desc="Testing")
     with torch.no_grad():
         for inputs, targets in tloader:
-            inputs, targets = inputs.to(this_device), targets.to(this_device)
             with autocast(dtype=torch.bfloat16, device_type=this_device):
                 outputs = model(inputs)
                 loss = criterion(outputs, targets)
@@ -51,16 +55,17 @@ def test(model):
 
     return test_loss, accuracy
 
-@param('prune_params.er_method')
-@param('prune_params.prune_method')
-def compute_perturbation(er_method, prune_method, model, density, perturbation_table, level):
-    is_iterative = (prune_method != 'just dont') and (er_method == 'just dont') 
+
+def compute_perturbation(model, density, is_iterative, level, packaged):
+    expt_dir, prefix = packaged
+    config = get_current_config()
+    model_in_question = copy.deepcopy(model)
     if is_iterative:
-        pruning_harness = PruningStuff(model=model)
+        pruning_harness = PruningStuff(model=model_in_question)
     else:
         pruning_harness = PruningStuff()
 
-    pre_sparsity = print_sparsity_info(pruning_harness.model, verbose=False)
+    pre_sparsity = pruning_harness.model.get_overall_sparsity()
     pre_test_acc = test(pruning_harness.model)[1]
 
     if is_iterative:
@@ -68,17 +73,41 @@ def compute_perturbation(er_method, prune_method, model, density, perturbation_t
     else:
         pruning_harness.prune_at_initialization(er_init=density)
 
-    
-    post_sparsity = print_sparsity_info(pruning_harness.model, verbose=False)
+    post_sparsity = pruning_harness.model.get_overall_sparsity()
     
     post_test_acc = test(pruning_harness.model)[1]
 
     delta = post_test_acc - pre_test_acc
 
-    perturbation_table.field_names = ["Level", "Pre-Sparsity", "Post-Sparsity", "Accuracy (pre-pruning)", "Accuracy (post-pruning)", "Perturbation"]
-    perturbation_table.add_row([level, pre_sparsity, post_sparsity, pre_test_acc, post_test_acc, delta])
+
+    console = Console()
+    perturbation_table = Table(title="Perturbation Metrics")
+    perturbation_table.add_column("Level", style="cyan")
+    perturbation_table.add_column("Pre-Sparsity", style="magenta")
+    perturbation_table.add_column("Post-Sparsity", style="green")
+    perturbation_table.add_column("Accuracy (pre-pruning)", style="red")
+    perturbation_table.add_column("Accuracy (post-pruning)", style="blue")
+    perturbation_table.add_column("Perturbation", style="yellow")
+
+    perturbation_table.add_row(str(level), str(pre_sparsity), str(post_sparsity), str(pre_test_acc), str(post_test_acc), str(delta))
     
-    print(perturbation_table)
+    console.print(perturbation_table)
+
+    # Convert to DataFrame and append to CSV
+    df = pd.DataFrame([{
+        'level': level, 
+        'pre_sparsity': pre_sparsity, 
+        'post_sparsity': post_sparsity,
+        'pre_test_acc': pre_test_acc,
+        'post_test_acc': post_test_acc,
+        'perturbation': delta
+    }])
+
+    csv_path = os.path.join(config['experiment_params.expt_path'], 'metrics', 'perturbation_metrics.csv')
+    if os.path.exists(csv_path):
+        df.to_csv(csv_path, mode='a', header=False, index=False)
+    else:
+        df.to_csv(csv_path, mode='w', header=True, index=False)
 
     return {'level': level, 
             'pre_sparsity'  : pre_sparsity, 

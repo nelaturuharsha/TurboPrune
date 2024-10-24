@@ -20,7 +20,7 @@ optimizer:
   lr: 0.2
   scheduler_type: TriangularSchedule
   weight_decay: 1e-4
-  momentum: 0.9:
+  momentum: 0.9
   peak_lr: 1
 cyclic_training:
   num_cycles: 1
