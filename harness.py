@@ -276,7 +276,7 @@ class Harness:
 
                 if (epoch in epoch_iter) and self.config['experiment_params.compute_metrics']:
                     cycle_metric_stuff[f'epoch_{epoch}_test_acc'] = test_acc
-                    cycle_metric_stuff[f'epoch_{epoch}_max_eig'] = hessian_max_eigenvalue(self.model)
+                    cycle_metric_stuff[f'epoch_{epoch}_max_eig'] = hessian_max_eigenvalue(self.model, self.train_loader)
                     cycle_metric_stuff[f'epoch_{epoch}_current_epoch'] = self.epoch_counter
                     if not 'epochs_iter' in cycle_metric_stuff:
                         cycle_metric_stuff['epochs_iter'] = []

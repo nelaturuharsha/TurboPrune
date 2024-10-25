@@ -22,7 +22,7 @@ import pandas as pd
 import os
 
 
-def test(model):
+def test(model, test_loader):
     """Evaluate the model on the test set.
 
     Returns:
@@ -30,8 +30,6 @@ def test(model):
     """
     config = get_current_config()
     this_device = 'cuda'
-    loaders = AirbenchLoaders()
-    test_loader = loaders.test_loader
 
     model.to(this_device)
     criterion = nn.CrossEntropyLoss()
@@ -320,10 +318,11 @@ def hessian_trace(model):
     print('trace of hessian: ', trace)
     return trace
 
-def hessian_max_eigenvalue(model):
-    loaders = AirbenchLoaders(batch_size=1024)
-    train_loader = loaders.train_loader
-
+def hessian_max_eigenvalue(model, train_loader):
+    config = get_current_config()
+    if 'CIFAR100' in config['dataset.dataset_name']:
+        loaders = AirbenchLoaders(batch_size=128)
+        train_loader = loaders.train_loader
     criterion = nn.CrossEntropyLoss()
     model.train()
     model.cuda()
@@ -341,7 +340,11 @@ def hessian_max_eigenvalue(model):
     # Compute top eigenvalue
     top_eigenvalues, _ = hessian_comp.eigenvalues()
     max_eigenvalue = top_eigenvalues[0]
-    
+    max_eigenvalue = max_eigenvalue / 100
+
+    if 'CIFAR100' in config['dataset.dataset_name']:
+        del train_loader 
+        del loaders
     del hessian_comp
     print('max eigenvalue of hessian: ', max_eigenvalue)
     return max_eigenvalue
