@@ -58,13 +58,15 @@ class Harness:
     @param("dataset.dataset_name")
     @param("experiment_params.use_compile")
     @param("dist_params.distributed")
-    def __init__(self, dataset_name: str, use_compile: bool, distributed: bool, gpu_id: int, expt_dir: str, model: nn.Module) -> None:
+    @param("experiment_params.compute_metrics")
+    def __init__(self, dataset_name: str, use_compile: bool, distributed: bool, gpu_id: int, expt_dir: str, model: nn.Module, compute_metrics: bool) -> None:
         self.config = get_current_config()
         self.dataset_name = dataset_name.lower()
-        self.use_compile = use_compile
+        self.use_compile = True if use_compile == 'true' else False
         self.distributed = distributed and torch.cuda.device_count() > 1 and not self.dataset_name.startswith("cifar")
         self.num_classes = 1000 if self.dataset_name.startswith("imagenet") else 100 if self.dataset_name.startswith("cifar100") else 10
         self.gpu_id = gpu_id
+        self.compute_metrics = True if compute_metrics == 'true' else False
 
         if self.dataset_name.startswith("cifar"):
             self.gpu_id = 0
@@ -314,13 +316,14 @@ class Harness:
                     if level == 0 and epoch == 9:
                         save_model(self.model, os.path.join(self.expt_dir, "checkpoints", "model_rewind.pt"), distributed=self.distributed)
                         torch.save(self.optimizer.state_dict(), os.path.join(self.expt_dir, "artifacts", "optimizer_rewind.pt"))
+            
             cycle_metric_list.append(cycle_metric_stuff)
-            #print(cycle_metric_stuff)
+
             if self.gpu_id == 0:
                 save_metrics_and_update_summary(self.console, self.model, self.expt_dir, self.prefix, level, level_metrics, num_cycles, epoch_schedule)
                 save_model(self.model, os.path.join(self.expt_dir, "checkpoints", f"model_level_{level}_cycle_{cycle}.pt"), distributed=self.distributed)
                 self.console.print(f"[bold cyan]Saved checkpoint for level {level}, cycle {cycle}[/bold cyan]")
-        if self.config['experiment_params.compute_metrics']:
+        if self.compute_metrics:
             compute_lr_perturbation(level, cycle_metric_list, self.expt_dir, self.prefix)
         if self.gpu_id == 0:
             model = self.model.module if self.distributed else self.model
@@ -391,15 +394,22 @@ def main():
 
     resume_level = config["experiment_params.resume_level"]
     densities = generate_densities(current_sparsity=prune_harness.model.get_overall_sparsity())
+    at_init = True if config['prune_params.at_init'] == 'true' else False
     for level in range(resume_level, len(densities)):
         if rank == 0:
-            if level != 0:
+            if (level != 0 and not at_init):
                 console.print(f"[bold cyan]Pruning Model at level: {level} to a target density of {densities[level]:.4f}[/bold cyan]")
                 prune_harness.model.load_model(os.path.join(packaged[1], "checkpoints", f"model_level_{level-1}.pt"))
                 prune_harness.prune_the_model(prune_method=config['prune_params.prune_method'], target_density=densities[level])
                 sparsity = prune_harness.model.get_overall_sparsity()
                 panel = Panel(f"[bold green]Model sparsity after pruning: {sparsity:.4f}[/bold green]", title="Sparsity", border_style="green", expand=False)
                 prune_harness.model.reset_weights(training_type=config['experiment_params.training_type'], expt_dir=packaged[1])
+                console.print(panel)
+            else:
+                console.print(f"[bold cyan]Pruning Model at initialization[/bold cyan]")
+                prune_harness.prune_the_model(prune_method=config['prune_params.prune_method'], target_density=densities[level])
+                sparsity = prune_harness.model.get_overall_sparsity()
+                panel = Panel(f"[bold green]Model sparsity after pruning: {sparsity:.4f}[/bold green]", title="Sparsity", border_style="green", expand=False)
                 console.print(panel)
         
         if use_distributed:

@@ -137,7 +137,7 @@ def generate_densities(at_init: bool, prune_method: str, target_sparsity: float,
     Returns:
         list[float]: List of densities until target sparsity is reached.
     """
-
+    at_init = True if at_init == 'true' else False
     if prune_method in ['mag', 'random_erk', 'random_balanced']:
         if at_init:
             return [1-target_sparsity]
@@ -311,7 +311,6 @@ def generate_budgeted_schedule(epochs_per_level, num_cycles, strategy):
             for i in range(remainder):
                 epochs[i] -= 1
     
- 
     return epochs
 
 def save_metrics_and_update_summary(console, model, expt_dir, prefix, level, level_metrics, num_cycles, epoch_schedule):

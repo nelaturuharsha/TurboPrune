@@ -28,7 +28,7 @@ def get_current_params() -> None:
             required=True,
         ),
         target_sparsity=Param(float, 'target sparsity of the entire pruning cycle', required=True),
-        at_init=Param(bool, 'whether to prune at initialization', default='')
+        at_init=Param(str, 'whether to prune at initialization', default='false')
     )
 
     Section("experiment_params", "parameters to train model").params(
@@ -40,8 +40,8 @@ def get_current_params() -> None:
         ),
         resume_expt_name=Param(str, "resume path"),
         training_precision = Param(And(str, OneOf(['bfloat16', 'float32'])), default='float32'),
-        use_compile = Param(bool, "use torch compile", default=True),
-        compute_metrics = Param(bool, "compute metrics", default='')
+        use_compile = Param(str, "use torch compile", default='false'),
+        compute_metrics = Param(str, "compute metrics", default='true')
     )
 
     Section("optimizer", "data related stuff").params(
@@ -67,11 +67,11 @@ def get_current_params() -> None:
             required=True,
         ),
         peak_lr=Param(float, "peak learning rate"),
-        skip_warmup=Param(bool, "skip warmup", default='')
+        skip_warmup=Param(str, "skip warmup", default='false')
     )
 
     Section("dist_params", "distributed parameters").params(
-        distributed=Param(bool, "use distributed training", default=''))
+        distributed=Param(bool, "use distributed training", default=True))
 
     Section('cyclic_training', 'parameters for cyclic training').params(
         epochs_per_level=Param(int, 'maximum number of epochs each level is trained for', required=True),

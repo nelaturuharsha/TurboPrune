@@ -143,6 +143,8 @@ def TriangularSchedule(epochs_per_level, lr, peak_lr, skip_warmup, optimizer, st
     """
 
     total_train_steps = epochs_per_level * steps_per_epoch
+    skip_warmup = True if skip_warmup == 'true' else False
+    
     if skip_warmup:
         lr_schedule = np.interp(np.arange(1+total_train_steps), [0, total_train_steps], [peak_lr, 0])
     else:
