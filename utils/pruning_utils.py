@@ -83,58 +83,44 @@ class PruningStuff:
 
         return model
 
-    @param("prune_params.er_method")
-    @param("prune_params.er_init")
-    def prune_at_initialization(
-        self, er_method: str, er_init: float) -> nn.Module:
-        """Prune the model at initialization.
-
-        Args:
-            er_method (str): Method of pruning.
-            er_init (float): Initial sparsity target.
-
-        Returns:
-            nn.Module: The pruned model.
-        """
-        
-        init_sparsity = self.model.get_overall_sparsity()
-        er_method_name = f"prune_{er_method}"
-        pruner_method = globals().get(er_method_name)
-        if er_method in {"synflow", "snip"}:
-            self.model = pruner_method(self.model, self.train_loader, er_init)
-        else:
-            pruner_method(self.model, er_init)
-
-        print('We just pruned at init, woohoo!')
-        final_sparsity = self.model.get_overall_sparsity()
-
-        initial = Panel(f"[magenta]{init_sparsity:.4f}[/magenta]", title="Initial Sparsity")
-        final = Panel(f"[magenta]{final_sparsity:.4f}[/magenta]", title="Final Sparsity")
-        self.console.print(Columns([initial, final]))
-        self.console.print(f"[bold green]Pruning completed using {er_method} method![/bold green]")
-
     @param("prune_params.prune_method")
-    def level_pruner(self, prune_method: str, density: float) -> None:
-        """Prune the model at a specific density level.
+    @param('prune_params.at_init')
+    def prune_the_model(self, prune_method: str, target_density: float, at_init: bool) -> None:
+        """Prune the model using the specified method and density.
 
         Args:
             prune_method (str): Method of pruning.
-            density (float): Desired density after pruning.
+            target_density (float): Desired density after pruning.
         """
+
         init_sparsity = self.model.get_overall_sparsity()
 
         prune_method_name = f"prune_{prune_method}"
         pruner_method = globals().get(prune_method_name)
-        if prune_method in {"synflow", "snip"}:
-            self.model = pruner_method(self.model, self.train_loader, density)
-        else:
-            pruner_method(self.model, density)
         
+        if pruner_method is None:
+            self.console.print(f"[bold red]Error: Unknown pruning method '{prune_method}'[/bold red]")
+            return
+
+        if prune_method in {"synflow", "snip"}:
+            self.model = pruner_method(self.model, self.train_loader, target_density)
+        else:
+            pruner_method(self.model, target_density)
+
         final_sparsity = self.model.get_overall_sparsity()
+
         initial = Panel(f"[magenta]{init_sparsity:.4f}[/magenta]", title="Initial Sparsity")
         final = Panel(f"[cyan]{final_sparsity:.4f}[/cyan]", title="Final Sparsity")
         self.console.print(Columns([initial, final]))
         self.console.print(f"[bold green]Pruning completed using {prune_method} method![/bold green]")
+
+        if prune_method.startswith("er_"):
+            self.console.print("[bold yellow]Pruning at initialization completed.[/bold yellow]")
+        elif prune_method in ["mag", "random_erk", "random_balanced"]:
+            if at_init:
+                self.console.print("[bold yellow]Pruning at initialization completed.[/bold yellow]")
+            else:
+                self.console.print("[bold yellow]Level pruning completed.[/bold yellow]")
 
     def load_from_ckpt(self, path: str) -> None:
         """Load the model from a checkpoint.
@@ -486,3 +472,4 @@ def prune_er_balanced(model: nn.Module, er_sparse_init: float) -> None:
         if isinstance(m, (ConvMask, Conv1dMask, LinearMask)):
             m.set_er_mask(sparsity_list[l])
             l += 1
+

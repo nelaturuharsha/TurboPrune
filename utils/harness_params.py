@@ -20,19 +20,15 @@ def get_current_params() -> None:
     )
 
     Section("prune_params", "pruning configuration").params(
-        prune_rate=Param(float, "percentage of parameters to remove", default=0.2),
-        er_init=Param(float, "sparse init percentage/target", default=1.0),
-        er_method=Param(
-            And(str, OneOf(["er_erk", "er_balanced", "synflow", "snip", "just dont"])),
-            default="just dont",
-        ),
+        prune_rate=Param(float, "percentage of parameters to remove per level or at initialization", required=True),
         prune_method=Param(
             And(
-                str, OneOf(["random_erk", "random_balanced", "synflow", "snip", "mag", "just dont"])
+                str, OneOf(["er_erk", "er_balanced", "random_erk", "random_balanced", "synflow", "snip", "mag", "just dont"])
             ),
-            default='just dont',
+            required=True,
         ),
-        target_sparsity=Param(float, 'target sparsity of the entire pruning cycle', required=True)
+        target_sparsity=Param(float, 'target sparsity of the entire pruning cycle', required=True),
+        at_init=Param(bool, 'whether to prune at initialization', default='')
     )
 
     Section("experiment_params", "parameters to train model").params(
@@ -44,7 +40,8 @@ def get_current_params() -> None:
         ),
         resume_expt_name=Param(str, "resume path"),
         training_precision = Param(And(str, OneOf(['bfloat16', 'float32'])), default='float32'),
-        use_compile = Param(bool, "use torch compile", default=False)
+        use_compile = Param(bool, "use torch compile", default=True),
+        compute_metrics = Param(bool, "compute metrics", default='')
     )
 
     Section("optimizer", "data related stuff").params(
@@ -69,7 +66,9 @@ def get_current_params() -> None:
             ),
             required=True,
         ),
-        peak_lr=Param(float, "peak learning rate"),)
+        peak_lr=Param(float, "peak learning rate"),
+        skip_warmup=Param(bool, "skip warmup", default='')
+    )
 
     Section("dist_params", "distributed parameters").params(
         distributed=Param(bool, "use distributed training", default=''))

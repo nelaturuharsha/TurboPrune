@@ -33,12 +33,19 @@ import utils.pruning_utils as pruning_utils
 from utils.harness_utils import *
 from utils.dataset import AirbenchLoaders, imagenet
 from utils.distributed_utils import broadcast_model, check_model_equality, broadcast_object, setup_distributed
+from utils.metric_utils import *
 
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
 
 torch._dynamo.config.guard_nn_modules=True
 
+
+## (1) Length (2) Starting LR (3) Peak and (4) End LR 
+## more seeds
+## compute max eigenvalue after every cycle
+## compute perturbation after every cycle
+## compute perturbation after first epoch
 
 class Harness:
     """Harness class to handle training and evaluation.
@@ -110,7 +117,7 @@ class Harness:
     @param("optimizer.weight_decay")
     @param("optimizer.scheduler_type")
     def create_optimizers(
-        self, lr: float, momentum: float, weight_decay: float, scheduler_type: str, epochs_per_level: int
+        self, lr: float, momentum: float, weight_decay: float, scheduler_type: str, epochs_per_level: int, skip_warmup: bool
     ) -> None:
         """Instantiate the optimizer and learning rate scheduler.
 
@@ -137,7 +144,7 @@ class Harness:
                 scheduler = getattr(schedulers, scheduler_type)            
                 
                 if scheduler_type == 'TriangularSchedule':
-                    self.scheduler = scheduler(optimizer=self.optimizer, steps_per_epoch=len(self.train_loader), epochs_per_level=epochs_per_level)
+                    self.scheduler = scheduler(optimizer=self.optimizer, steps_per_epoch=len(self.train_loader), epochs_per_level=epochs_per_level, skip_warmup=skip_warmup)
                 elif scheduler_type == 'TrapezoidalSchedule':
                     self.scheduler = scheduler(optimizer=self.optimizer, steps_per_epoch=len(self.train_loader),
                                                 warmup_steps=len(self.train_loader) * self.config['optimizer.warmup_steps'],
@@ -155,7 +162,7 @@ class Harness:
                 "Type": type(self.optimizer).__name__, "Learning rate": lr,
                 "Momentum": momentum, "Weight decay": weight_decay,
                 "Scheduler": scheduler_type, "Epochs per level": epochs_per_level,
-                "Starting LR": lr
+                "Starting LR": lr, "Skip warmup": skip_warmup
             }
     def train_one_epoch(self, epoch: int) -> Tuple[float, float]:
         """Train the model for one epoch.
@@ -236,12 +243,11 @@ class Harness:
 
         return test_loss, accuracy
     
-    @param("experiment_params.training_type")
     @param("cyclic_training.num_cycles")
-    def train_one_level(self, training_type: str, num_cycles: int, level: int) -> None:
+    def train_one_level(self, num_cycles: int, level: int) -> None: 
         level_metrics = {'cycle': [], 'epoch': [], 'train_loss': [], 'test_loss': [], 'train_acc': [], 'test_acc': []}
         epoch_schedule = generate_budgeted_schedule()
-            
+        cycle_metric_list = []
         for cycle in range(num_cycles):
             if self.gpu_id == 0:
                 model = self.model.module if self.distributed else self.model
@@ -251,8 +257,9 @@ class Harness:
                     "Epochs this cycle": f"{epoch_schedule[cycle]}", "Total epochs so far": f"{sum(epoch_schedule[:cycle+1])}/{sum(epoch_schedule)}",
                     "Current Sparsity": f"{model.get_overall_sparsity():.4f}"
                 } 
-
-            self.create_optimizers(epochs_per_level=epoch_schedule[cycle])
+            epoch_iter = [1, epoch_schedule[cycle] - 1]
+            skip_warmup = True if (cycle != 0 and self.config['optimizer.skip_warmup']) else False
+            self.create_optimizers(epochs_per_level=epoch_schedule[cycle], skip_warmup=skip_warmup)
             if self.gpu_id == 0:
                 display_training_info(cycle_info=self.cycle_info, training_info=self.training_info, optimizer_info=self.optimizer_info)
                 if cycle == 0 and level == 0:
@@ -261,13 +268,21 @@ class Harness:
                 elif level != 0:
                     self.console.print(f"[bold cyan]Loading optimizer state for level {level}, cycle {cycle}[/bold cyan]")
                     self.optimizer.load_state_dict(torch.load(os.path.join(self.expt_dir, "artifacts", "optimizer_init.pt")))
-
+            cycle_metric_stuff = {}
             for epoch in range(epoch_schedule[cycle]):
-                
                 self.epoch_counter += 1
                 train_loss, train_acc = self.train_one_epoch(epoch)
                 test_loss, test_acc = self.test()
 
+                if (epoch in epoch_iter) and self.config['experiment_params.compute_metrics']:
+                    cycle_metric_stuff[f'epoch_{epoch}_test_acc'] = test_acc
+                    cycle_metric_stuff[f'epoch_{epoch}_max_eig'] = hessian_max_eigenvalue(self.model)
+                    cycle_metric_stuff[f'epoch_{epoch}_current_epoch'] = self.epoch_counter
+                    if not 'epochs_iter' in cycle_metric_stuff:
+                        cycle_metric_stuff['epochs_iter'] = []
+                    if not 'cycle_num' in cycle_metric_stuff:
+                        cycle_metric_stuff['cycle_num'] = cycle
+                    cycle_metric_stuff['epochs_iter'].append(epoch)
                 for key, value in zip(['cycle', 'epoch', 'train_loss', 'test_loss', 'train_acc', 'test_acc'],
                                       [cycle, self.epoch_counter, train_loss, test_loss, train_acc, test_acc]):
                     level_metrics[key].append(value)
@@ -299,13 +314,17 @@ class Harness:
                     if level == 0 and epoch == 9:
                         save_model(self.model, os.path.join(self.expt_dir, "checkpoints", "model_rewind.pt"), distributed=self.distributed)
                         torch.save(self.optimizer.state_dict(), os.path.join(self.expt_dir, "artifacts", "optimizer_rewind.pt"))
-
+            cycle_metric_list.append(cycle_metric_stuff)
+            #print(cycle_metric_stuff)
             if self.gpu_id == 0:
+                save_metrics_and_update_summary(self.console, self.model, self.expt_dir, self.prefix, level, level_metrics, num_cycles, epoch_schedule)
                 save_model(self.model, os.path.join(self.expt_dir, "checkpoints", f"model_level_{level}_cycle_{cycle}.pt"), distributed=self.distributed)
                 self.console.print(f"[bold cyan]Saved checkpoint for level {level}, cycle {cycle}[/bold cyan]")
-
+        if self.config['experiment_params.compute_metrics']:
+            compute_lr_perturbation(level, cycle_metric_list, self.expt_dir, self.prefix)
         if self.gpu_id == 0:
             model = self.model.module if self.distributed else self.model
+            save_metrics_and_update_summary(self.console, model, self.expt_dir, self.prefix, level, level_metrics, num_cycles, epoch_schedule)
 
 def initialize_config(): 
     config = get_current_config()
@@ -371,21 +390,17 @@ def main():
     prune_harness = pruning_utils.PruningStuff(model=model)
 
     resume_level = config["experiment_params.resume_level"]
-    is_iterative = (config['prune_params.er_method'] == 'just dont') and (config['prune_params.prune_method'] != 'just dont')
-    densities = generate_densities(current_sparsity=prune_harness.model.get_overall_sparsity()) if is_iterative else [config['prune_params.er_init']]
+    densities = generate_densities(current_sparsity=prune_harness.model.get_overall_sparsity())
     for level in range(resume_level, len(densities)):
         if rank == 0:
-            if is_iterative and level != 0:
-                console.print(f"[bold cyan]Pruning Model at level: {level}[/bold cyan]")
+            if level != 0:
+                console.print(f"[bold cyan]Pruning Model at level: {level} to a target density of {densities[level]:.4f}[/bold cyan]")
                 prune_harness.model.load_model(os.path.join(packaged[1], "checkpoints", f"model_level_{level-1}.pt"))
-                prune_harness.level_pruner(density=densities[level])
+                prune_harness.prune_the_model(prune_method=config['prune_params.prune_method'], target_density=densities[level])
                 sparsity = prune_harness.model.get_overall_sparsity()
                 panel = Panel(f"[bold green]Model sparsity after pruning: {sparsity:.4f}[/bold green]", title="Sparsity", border_style="green", expand=False)
-                prune_harness.model = reset_weights(expt_dir=expt_dir, model=prune_harness.model)
+                prune_harness.model.reset_weights(training_type=config['experiment_params.training_type'], expt_dir=packaged[1])
                 console.print(panel)
-            elif not is_iterative:
-                console.print('[bold cyan]Pruning at initialization[/bold cyan]')
-                prune_harness.prune_at_initialization(er_init=densities[level])
         
         if use_distributed:
             broadcast_model(prune_harness.model)

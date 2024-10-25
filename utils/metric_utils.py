@@ -10,8 +10,9 @@ from torch.amp import autocast
 from utils.pruning_utils import PruningStuff
 from fastargs import get_current_config
 from utils.harness_utils import *
+from utils.mask_layers import ConvMask, Conv1dMask, LinearMask
 
-from utils.airbench_loader import CifarLoader
+from utils.dataset import AirbenchLoaders
 from pyhessian import hessian
 
 
@@ -29,7 +30,8 @@ def test(model):
     """
     config = get_current_config()
     this_device = 'cuda'
-    test_loader = CifarLoader(path='./cifar10', batch_size=512, train=False, dataset=config['dataset.dataset_name'])
+    loaders = AirbenchLoaders()
+    test_loader = loaders.test_loader
 
     model.to(this_device)
     criterion = nn.CrossEntropyLoss()
@@ -56,10 +58,71 @@ def test(model):
     return test_loss, accuracy
 
 
-def compute_perturbation(model, density, is_iterative, level, packaged):
-    expt_dir, prefix = packaged
+def compute_lr_perturbation(level, metric_list, expt_dir, prefix):
+    console = Console()
+    perturbation_tree = Tree("Perturbation Metrics")
+
+    for i in range(len(metric_list) - 1):
+        current_metric = metric_list[i]
+        next_metric = metric_list[i + 1]
+
+        current_cycle = current_metric['cycle_num']
+        next_cycle = next_metric['cycle_num']
+        # Extract relevant data
+        _, current_epoch = current_metric['epochs_iter']
+        next_epoch, _ = next_metric['epochs_iter']
+
+        current_print_epoch = current_metric[f'epoch_{current_epoch}_current_epoch']
+        next_print_epoch = next_metric[f'epoch_{next_epoch}_current_epoch']
+
+        current_acc = current_metric[f'epoch_{current_epoch}_test_acc']
+        next_acc = next_metric[f'epoch_{next_epoch}_test_acc']
+
+        current_max_eig = current_metric[f'epoch_{current_epoch}_max_eig']
+        next_max_eig = next_metric[f'epoch_{next_epoch}_max_eig']
+
+        delta_acc = next_acc - current_acc
+        delta_max_eig = next_max_eig - current_max_eig
+
+        data = {
+            'level': level,
+            'prev_cycle': current_cycle,
+            'next_cycle': next_cycle,
+            'prev_epoch': current_print_epoch,
+            'next_epoch': next_print_epoch,
+            'prev_acc': f'{current_acc:.4f}',
+            'next_acc': f'{next_acc:.4f}',
+            'prev_max_eig': f'{current_max_eig:.4f}',
+            'next_max_eig': f'{next_max_eig:.4f}',
+            'delta_acc': f'{delta_acc:.4f}',
+            'delta_max_eig': f'{delta_max_eig:.4f}'
+        }
+
+        # Write to CSV
+        csv_path = os.path.join(expt_dir, 'metrics', f'{prefix}_perturbation_metrics.csv')
+        pd.DataFrame([data]).to_csv(csv_path, mode='a', header=not os.path.exists(csv_path), index=False)
+
+        # Add to tree for printing
+        cycle_branch = perturbation_tree.add(f"Level {level}, Cycle {current_cycle} -> Cycle {next_cycle}", style="cyan")
+        cycle_branch.add(f"Epochs: {current_print_epoch} -> {next_print_epoch}", style="magenta")
+        cycle_branch.add(f"Accuracy: {current_acc:.2f} -> {next_acc:.2f} (Δ: {delta_acc:.2f})", style="yellow")
+        cycle_branch.add(f"Max Eigenvalue: {current_max_eig:.2f} -> {next_max_eig:.2f} (Δ: {delta_max_eig:.2f})", style="green")
+
+    # Print the tree
+    console.print(Panel(perturbation_tree, title="Perturbation Metrics", border_style="cyan"))
+
+
+def compute_level(epoch, level, cycle, model, density, is_iterative, packaged):
     config = get_current_config()
+
+    densities = generate_densities(current_sparsity=0.0 if is_iterative else [config['prune_params.er_init']])
+
+    expt_dir, prefix = packaged
+
     model_in_question = copy.deepcopy(model)
+    print('Computing hessian max eigenvalue')
+    hessian_max_eig = hessian_max_eigenvalue(model_in_question)
+
     if is_iterative:
         pruning_harness = PruningStuff(model=model_in_question)
     else:
@@ -68,17 +131,13 @@ def compute_perturbation(model, density, is_iterative, level, packaged):
     pre_sparsity = pruning_harness.model.get_overall_sparsity()
     pre_test_acc = test(pruning_harness.model)[1]
 
-    if is_iterative:
-        pruning_harness.level_pruner(density=density)
-    else:
-        pruning_harness.prune_at_initialization(er_init=density)
+    pruning_harness.prune_the_model(prune_method=config['prune_params.prune_method'], density=densities[level+1])
 
     post_sparsity = pruning_harness.model.get_overall_sparsity()
     
     post_test_acc = test(pruning_harness.model)[1]
 
     delta = post_test_acc - pre_test_acc
-
 
     console = Console()
     perturbation_table = Table(title="Perturbation Metrics")
@@ -89,34 +148,29 @@ def compute_perturbation(model, density, is_iterative, level, packaged):
     perturbation_table.add_column("Accuracy (post-pruning)", style="blue")
     perturbation_table.add_column("Perturbation", style="yellow")
 
-    perturbation_table.add_row(str(level), str(pre_sparsity), str(post_sparsity), str(pre_test_acc), str(post_test_acc), str(delta))
-    
+    perturbation_table.add_row(str(level), f"{pre_sparsity:.4f}", f"{post_sparsity:.4f}", 
+                               f"{pre_test_acc:.2f}", f"{post_test_acc:.2f}", f"{delta:.2f}")
+    console.print('\n')
     console.print(perturbation_table)
+    console.print('\n')
 
     # Convert to DataFrame and append to CSV
     df = pd.DataFrame([{
         'level': level, 
+        'epoch': epoch,
+        'cycle': cycle,
         'pre_sparsity': pre_sparsity, 
         'post_sparsity': post_sparsity,
         'pre_test_acc': pre_test_acc,
         'post_test_acc': post_test_acc,
-        'perturbation': delta
+        'perturbation': delta,
+        'hessian_max_eig': hessian_max_eig
     }])
 
-    csv_path = os.path.join(config['experiment_params.expt_path'], 'metrics', 'perturbation_metrics.csv')
-    if os.path.exists(csv_path):
-        df.to_csv(csv_path, mode='a', header=False, index=False)
-    else:
-        df.to_csv(csv_path, mode='w', header=True, index=False)
+    csv_path = os.path.join(expt_dir, 'metrics', f'{prefix}_{epoch}_{cycle}_{level}_perturbation_metrics.csv')
+    df.to_csv(csv_path, mode='a', header=not os.path.exists(csv_path), index=False)
 
-    return {'level': level, 
-            'pre_sparsity'  : pre_sparsity, 
-            'post_sparsity' : post_sparsity,
-            'pre_test_acc'  : pre_test_acc,
-            'post_test_acc' : post_test_acc,
-            'perturbation'  : delta} 
-
-
+    
 class LinearModeConnectivity:
     def __init__(self, expt_path : str, model : nn.Module):
         super(LinearModeConnectivity, self).__init__()
@@ -124,8 +178,9 @@ class LinearModeConnectivity:
         self.config = get_current_config()
 
         self.this_device = 'cuda'
-        self.train_loader = CifarLoader(path='./cifar10', batch_size=512, train=True, aug={'flip' : True, 'translate' : 2}, altflip=True, dataset=self.config['dataset.dataset_name'])
-        self.test_loader = CifarLoader(path='./cifar10', batch_size=512, train=False, dataset=self.config['dataset.dataset_name'])
+        loaders = AirbenchLoaders()
+        self.train_loader = loaders.train_loader
+        self.test_loader = loaders.test_loader
         
         self.alphas = np.arange(0, 1, 0.1)
         self.criterion = nn.CrossEntropyLoss()
@@ -241,9 +296,10 @@ class LinearModeConnectivity:
         save_path = os.path.join(self.save_path, f'linear_mode_{level1}_{level2}.csv')
         pd.DataFrame(data_dict).to_csv(save_path, index=False)
         
-def hessian_trace(train_loader, model):
+def hessian_trace(model):
     config = get_current_config()
-    train_loader = CifarLoader(path='./cifar10', batch_size=1000, train=True, aug={'flip' : True, 'translate' : 2}, altflip=True, drop_last=True, dataset=config['dataset.dataset_name'])
+    loaders = AirbenchLoaders(batch_size=1024)
+    train_loader = loaders.train_loader
 
     criterion = nn.CrossEntropyLoss()
     model.train()
@@ -263,3 +319,29 @@ def hessian_trace(train_loader, model):
     del hessian_comp
     print('trace of hessian: ', trace)
     return trace
+
+def hessian_max_eigenvalue(model):
+    loaders = AirbenchLoaders(batch_size=1024)
+    train_loader = loaders.train_loader
+
+    criterion = nn.CrossEntropyLoss()
+    model.train()
+    model.cuda()
+    
+    for i, (images, target) in tqdm.tqdm(
+        enumerate(train_loader), ascii=True, total=len(train_loader)
+    ):
+        break
+    
+    images = images.cuda()
+    target = target.cuda()
+
+    hessian_comp = hessian(model, criterion, data=(images, target), cuda=True)
+    
+    # Compute top eigenvalue
+    top_eigenvalues, _ = hessian_comp.eigenvalues()
+    max_eigenvalue = top_eigenvalues[0]
+    
+    del hessian_comp
+    print('max eigenvalue of hessian: ', max_eigenvalue)
+    return max_eigenvalue

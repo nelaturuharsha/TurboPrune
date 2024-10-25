@@ -1,15 +1,18 @@
+import os
+from typing import Type, List, Dict
+
+from utils.mask_layers import *
+from utils.deit import *
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Type, List, Dict
 from torchvision import models
+
 from rich.console import Console
 from rich.table import Table
 
 from fastargs.decorators import param
-
-from utils.mask_layers import *
-from utils.deit import *
 
 class PruneModel(nn.Module):
     def __init__(self):
@@ -103,6 +106,49 @@ class PruneModel(nn.Module):
     def load_model(self, load_path):
         self.model.load_state_dict(torch.load(load_path))
 
+    @param('experiment_params.training_type')
+    def reset_weights(self, training_type: str, expt_dir: str) -> None:
+        """Reset (or don't) the weights to a given checkpoint based on the provided training type.
+
+        Args:
+            training_type (str): Type of training ('imp', 'wr', or 'lrr').
+            expt_dir (str): Directory of the experiment.
+        """
+        if training_type == "imp":
+            print('Rewinding to init')
+            checkpoint_file = "model_init.pt"
+        elif training_type == "wr":
+            print('Rewinding to warmup init (Epoch 10)')
+            checkpoint_file = "model_rewind.pt"
+        else:
+            print("Probably LRR, nothing to do -- or if PaI, we aren't touching it in any case.")
+            return
+
+        original_dict = torch.load(os.path.join(expt_dir, "checkpoints", checkpoint_file))
+        current_state_dict = self.model.state_dict()
+        
+        for name, param in original_dict.items():
+            if name in current_state_dict and current_state_dict[name].shape == param.shape and not name.endswith('mask'):
+                print(f'Restoring weights for {name}')
+                current_state_dict[name].copy_(param)
+        
+        self.model.load_state_dict(current_state_dict)
+
+    def reset_masks(self):
+        for module in self.model.modules():
+            if isinstance(module, (ConvMask, Conv1dMask, LinearMask)):
+                module.mask.fill_(1)
+
+    def load_only_masks(self, load_path: str):
+        original_dict = torch.load(load_path)
+        current_state_dict = self.model.state_dict()
+        
+        for name, param in original_dict.items():
+            if name in current_state_dict and current_state_dict[name].shape == param.shape and name.endswith('mask'):
+                print(f'Restoring masks for {name}')
+                current_state_dict[name].copy_(param)
+        
+        self.model.load_state_dict(current_state_dict)
 
 class TorchVisionModel(PruneModel):
     @param('model_params.model_name')
@@ -176,10 +222,6 @@ class CustomModel(PruneModel):
             nn.Linear: LinearMask,
         }
         self.replace_layers(layer_types_map)
-
-
-
-
 
 class PreActBlock(nn.Module):
     """Pre-activation version of the BasicBlock used in a ResNet.
