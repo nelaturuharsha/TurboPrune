@@ -260,7 +260,7 @@ class Harness:
                     "Current Sparsity": f"{model.get_overall_sparsity():.4f}"
                 } 
             epoch_iter = [1, epoch_schedule[cycle] - 1]
-            skip_warmup = True if (cycle != 0 and self.config['optimizer.skip_warmup']) else False
+            skip_warmup = True if (cycle != 0 and self.config['optimizer.skip_warmup'] == 'true') else False
             self.create_optimizers(epochs_per_level=epoch_schedule[cycle], skip_warmup=skip_warmup)
             if self.gpu_id == 0:
                 display_training_info(cycle_info=self.cycle_info, training_info=self.training_info, optimizer_info=self.optimizer_info)
@@ -341,7 +341,7 @@ def initialize_config():
 def main():
     """Main function for distributed training."""
     config = initialize_config()
-    use_distributed = config['dist_params.distributed']
+    use_distributed = config['dist_params.distributed'] and torch.cuda.device_count() > 1 and not config['dataset.dataset_name'].startswith("cifar")
     set_seed()
 
     if use_distributed:
@@ -395,9 +395,10 @@ def main():
     resume_level = config["experiment_params.resume_level"]
     densities = generate_densities(current_sparsity=prune_harness.model.get_overall_sparsity())
     at_init = True if config['prune_params.at_init'] == 'true' else False
+    print('at init in harness', at_init)
     for level in range(resume_level, len(densities)):
         if rank == 0:
-            if (level != 0 and not at_init):
+            if (level != 0) and (not at_init):
                 console.print(f"[bold cyan]Pruning Model at level: {level} to a target density of {densities[level]:.4f}[/bold cyan]")
                 prune_harness.model.load_model(os.path.join(packaged[1], "checkpoints", f"model_level_{level-1}.pt"))
                 prune_harness.prune_the_model(prune_method=config['prune_params.prune_method'], target_density=densities[level])
@@ -405,12 +406,16 @@ def main():
                 panel = Panel(f"[bold green]Model sparsity after pruning: {sparsity:.4f}[/bold green]", title="Sparsity", border_style="green", expand=False)
                 prune_harness.model.reset_weights(training_type=config['experiment_params.training_type'], expt_dir=packaged[1])
                 console.print(panel)
-            else:
+            elif (level == 0) and (not at_init):
+                console.print(f'[bold cyan] Dense training homie! [/bold cyan]')
+            elif at_init:
                 console.print(f"[bold cyan]Pruning Model at initialization[/bold cyan]")
                 prune_harness.prune_the_model(prune_method=config['prune_params.prune_method'], target_density=densities[level])
                 sparsity = prune_harness.model.get_overall_sparsity()
                 panel = Panel(f"[bold green]Model sparsity after pruning: {sparsity:.4f}[/bold green]", title="Sparsity", border_style="green", expand=False)
                 console.print(panel)
+            else:
+                raise ValueError('uh, idk what to do')
         
         if use_distributed:
             broadcast_model(prune_harness.model)

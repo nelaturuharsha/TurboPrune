@@ -66,7 +66,9 @@ def get_current_params() -> None:
             ),
             required=True,
         ),
-        peak_lr=Param(float, "peak learning rate"),
+        lr_start=Param(float, "start learning rate", required=True  ),
+        lr_peak=Param(float, "peak learning rate", required=True),
+        lr_end=Param(float, "end learning rate", required=True),
         skip_warmup=Param(str, "skip warmup", default='false')
     )
 

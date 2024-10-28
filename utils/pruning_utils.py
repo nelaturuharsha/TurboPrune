@@ -41,7 +41,7 @@ class PruningStuff:
         self.this_device = "cuda:0"
         self.config = get_current_config()
         self.dataset_name = self.config['dataset.dataset_name']
-        self.distributed = self.config['dist_params.distributed']
+        self.distributed = True if self.config['dist_params.distributed'] == 'true' else False
         if self.distributed:
             self.rank = dist.get_rank()
 
@@ -80,12 +80,11 @@ class PruningStuff:
             if self.distributed and self.rank == 0:
                 self.console.print("[bold turquoise]Using Custom Model :D[/bold turquoise]")
         model = model.to(self.this_device)
-
         return model
 
     @param("prune_params.prune_method")
     @param('prune_params.at_init')
-    def prune_the_model(self, prune_method: str, target_density: float, at_init: bool) -> None:
+    def prune_the_model(self, prune_method: str, target_density: float, at_init: str) -> None:
         """Prune the model using the specified method and density.
 
         Args:
@@ -93,6 +92,7 @@ class PruningStuff:
             target_density (float): Desired density after pruning.
         """
 
+        at_init = True if at_init == 'true' else False
         init_sparsity = self.model.get_overall_sparsity()
 
         prune_method_name = f"prune_{prune_method}"

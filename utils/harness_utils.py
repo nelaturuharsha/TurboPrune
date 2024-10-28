@@ -11,7 +11,6 @@ import pandas as pd
 
 import torch
 
-
 from fastargs.decorators import param
 from fastargs import get_current_config
 
@@ -64,15 +63,21 @@ def gen_expt_dir(
         Tuple[str, str]: Prefix and path to the experiment directory.
     """
     config = get_current_config()
-    prefix = None
-    prune_method = config['prune_params.prune_method']
-
-    common_prefix = f"{config['dataset.dataset_name']}_{config['model_params.model_name']}_{config['experiment_params.training_type']}_seed_{config['experiment_params.seed']}_budget_{config['cyclic_training.epochs_per_level']}_cycles_{config['cyclic_training.num_cycles']}_strat_{config['cyclic_training.strategy']}"
-
-    if prune_method != 'just dont':
-        prefix = f"{common_prefix}_{prune_method}_rate_{1-config['prune_params.target_sparsity']:.4f}"
-    else:
-        prefix = f"{common_prefix}_{prune_method}"
+    
+    # Create prefix using f-string with config values
+    prefix = (
+        f"{config['dataset.dataset_name']}"
+        f"_{config['model_params.model_name']}"
+        f"_{config['experiment_params.training_type']}"
+        f"_{config['prune_params.prune_method']}"
+        f"_{config['prune_params.target_sparsity']}"
+        f"_seed_{config['experiment_params.seed']}"
+        f"_budget_{config['cyclic_training.epochs_per_level']}"
+        f"_cycles_{config['cyclic_training.num_cycles']}"
+        f"_strat_{config['cyclic_training.strategy']}"
+        f"_lr_{config['optimizer.lr_start']}-{config['optimizer.lr_peak']}-{config['optimizer.lr_end']}"
+        f"_skipwarmup_{config['optimizer.skip_warmup']}"
+    )
     
     if resume_level != 0 and resume_expt_name:
         expt_dir = os.path.join(base_dir, resume_expt_name)
@@ -82,7 +87,7 @@ def gen_expt_dir(
         unique_id = uuid.uuid4().hex[:6]
         unique_name = f"{prefix}_{current_time}_{unique_id}"
         expt_dir = os.path.join(base_dir, unique_name)
-        print(f"Creating this Folder {expt_dir}:)")
+        print(f"Creating this Folder {expt_dir} :)")
     else:
         raise AssertionError(
             "Either start from scratch, or provide a path to the checkpoint :)"
@@ -90,10 +95,8 @@ def gen_expt_dir(
 
     if not os.path.exists(expt_dir):
         os.makedirs(expt_dir)
-        os.makedirs(f"{expt_dir}/checkpoints")
-        os.makedirs(f"{expt_dir}/metrics")
-        os.makedirs(f"{expt_dir}/metrics/epochwise_metrics")
-        os.makedirs(f"{expt_dir}/artifacts/")
+        for subdir in ['checkpoints', 'metrics', 'metrics/epochwise_metrics', 'artifacts']:
+            os.makedirs(os.path.join(expt_dir, subdir))
 
     return prefix, expt_dir
 
@@ -120,12 +123,11 @@ def set_seed(seed: int, is_deterministic: bool = False) -> None:
     os.environ["PYTHONHASHSEED"] = str(seed)
     print(f"Random seed set as {seed}")
 
-
+@param("prune_params.at_init")
 @param("prune_params.prune_method")
 @param("prune_params.target_sparsity")
 @param("prune_params.prune_rate")
-@param("prune_params.at_init")
-def generate_densities(at_init: bool, prune_method: str, target_sparsity: float, prune_rate: float, current_sparsity: float) -> list[float]:
+def generate_densities(at_init: str, prune_method: str, target_sparsity: float, prune_rate: float, current_sparsity: float) -> list[float]:
     """Generate a list of densities for pruning. The density is calculated as
        (1 - prune_rate) ^ i multiplied by current_sparsity until target_sparsity is reached.
     Args:

@@ -10,23 +10,28 @@ prune_params:
   prune_method: mag
   prune_rate: 0.2
   target_sparsity: 0.999
+  at_init: 'false'
 experiment_params:
   base_dir: ./experiments 
   seed: 0
   training_type: lrr
   training_precision: bfloat16
-  use_compile: false 
-  compute_metrics: true 
+  use_compile: 'false'
+  compute_metrics: 'true'
 optimizer:
   lr: 0.2
-  scheduler_type: TriangularSchedulepytho
+  scheduler_type: TriangularSchedule
   weight_decay: 5e-4
   momentum: 0.9
-  peak_lr: 1
-  skip_warmup: false
+  lr_start: 0.2
+  lr_peak: 1
+  lr_end: 0.01
+  skip_warmup: 'false'
 cyclic_training:
   num_cycles: 1 
   epochs_per_level: 150
   strategy: constant
+wandb_params:
+  project_name: placeholder
 dist_params:
-  distributed: false
+  distributed: 'false'

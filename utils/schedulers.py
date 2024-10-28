@@ -125,10 +125,10 @@ def step_trapezoidal(it, lr, num_iterations, warmup_iters, warmdown_iters):
         return decay_ratio
 
 @param("experiment_params.epochs_per_level")
-@param('optimizer.lr')
-@param('optimizer.peak_lr')
-@param('optimizer.skip_warmup')
-def TriangularSchedule(epochs_per_level, lr, peak_lr, skip_warmup, optimizer, steps_per_epoch):
+@param('optimizer.lr_start')
+@param('optimizer.lr_peak')
+@param('optimizer.lr_end')
+def TriangularSchedule(epochs_per_level, lr_start, lr_peak, lr_end, optimizer,  steps_per_epoch, skip_warmup: bool = False):
     """Triangular learning rate schedule. Best performance with CIFAR10.
     credits: https://x.com/kellerjordan0/status/1776701859669172398
 
@@ -137,22 +137,29 @@ def TriangularSchedule(epochs_per_level, lr, peak_lr, skip_warmup, optimizer, st
         epochs_per_level (int): Number of epochs per level.
         steps_per_epoch (int): Number of steps per epoch.
         skip_warmup (bool): If True, skip the warmup phase and start at peak_lr.
-
     Returns:
         torch.optim.lr_scheduler.LambdaLR: Lambda learning rate scheduler.
     """
+    assert lr_peak > lr_end
+    assert lr_peak > lr_start
 
     total_train_steps = epochs_per_level * steps_per_epoch
-    skip_warmup = True if skip_warmup == 'true' else False
     
     if skip_warmup:
-        lr_schedule = np.interp(np.arange(1+total_train_steps), [0, total_train_steps], [peak_lr, 0])
+        print('$$$')
+        print(f'skipping warmup')
+        print('$$$')
+        lr_schedule = np.interp(np.arange(1+total_train_steps), [0, total_train_steps], [lr_peak, lr_end])
     else:
-        lr_schedule = np.interp(np.arange(1+total_train_steps), [0, int(lr * total_train_steps), total_train_steps], [lr, peak_lr, 0])
+        print('$$$')
+        print(f'not skipping warmup')
+        print('$$$')
+        lr_schedule = np.interp(np.arange(1+total_train_steps), [0, int(lr_start * total_train_steps), total_train_steps], [lr_start, lr_peak, lr_end])
+ 
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_schedule.__getitem__)
     return scheduler
 
-@param("experiment_params.epochs_per_level")
+@param("optimizer.epochs_per_level")
 @param("optimizer.warmup_steps")
 @param("optimizer.cooldown_steps")
 @param("optimizer.lr")
