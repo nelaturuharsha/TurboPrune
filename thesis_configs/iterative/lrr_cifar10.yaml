@@ -30,6 +30,7 @@ cyclic_training:
   num_cycles: 1 
   epochs_per_level: 150
   strategy: constant
+  total_training_budget: 0
 wandb_params:
   project_name: placeholder
 dist_params:

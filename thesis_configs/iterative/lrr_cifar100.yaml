@@ -16,19 +16,21 @@ experiment_params:
   training_type: lrr
   training_precision: bfloat16
   use_compile: 'false'
-  compute_metrics: 'true' 
+  compute_metrics: 'true'
 optimizer:
-  lr: 0.2
   scheduler_type: TriangularSchedule
   weight_decay: 1e-3
   momentum: 0.9
-  peak_lr: 1
+  lr_start: 0.2
+  lr_peak: 1
+  lr_end: 0.01
   skip_warmup: 'false'
 cyclic_training:
   num_cycles: 1 
   epochs_per_level: 150
   strategy: constant
+  total_training_budget: 0
 wandb_params:
-  project_name: LRR_experiments
+  project_name: placeholder
 dist_params:
   distributed: 'false'

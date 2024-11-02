@@ -174,7 +174,8 @@ def save_config(expt_dir: str, config: Any) -> None:
 
 @param('cyclic_training.strategy')
 @param('cyclic_training.total_training_budget')
-def generate_level_schedule(strategy: str, total_training_budget: int, num_levels: int = None) -> list[int]:
+@param('cyclic_training.epochs_per_level')
+def generate_level_schedule(strategy: str, total_training_budget: int, epochs_per_level, num_levels: int = None) -> list[int]:
     """
     Generates a schedule of epochs per level based on the given strategy.
     
@@ -183,13 +184,26 @@ def generate_level_schedule(strategy: str, total_training_budget: int, num_level
                       'linear_decrease', 'linear_increase', 'exponential_decrease',
                       'exponential_increase', 'cyclic_peak', 'alternating', 'plateau'.
         total_training_budget (int): Total number of epochs across all levels
+        epochs_per_level (int, optional): Number of epochs per level. Must be provided.
         num_levels (int, optional): Number of levels. Must be provided.
     
     Returns:
         list[int]: A list of epochs for each level
     """
     assert num_levels is not None, "Number of levels must be provided"
+    
+     # Ensure either total_training_budget or epochs_per_level is provided
+    if total_training_budget is 0 and epochs_per_level is None:
+        raise ValueError("Either total_training_budget or epochs_per_level must be specified")
 
+    # Calculate total_training_budget if only epochs_per_level is provided
+    if total_training_budget is 0:
+        total_training_budget = num_levels * epochs_per_level
+        print(f"Total training budget is {total_training_budget}")
+
+
+    strategy = 'constant'
+        
     if strategy == 'linear_decrease':
         step = total_training_budget / (num_levels * (num_levels + 1) / 2)
         epochs = [int(step * (num_levels - i)) for i in range(num_levels)]

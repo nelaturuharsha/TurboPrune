@@ -258,7 +258,6 @@ class Harness:
         epoch_schedule = generate_cyclical_schedule(epochs_per_level=epochs_per_level) if use_cyclic_training else [epochs_per_level]
         single_scheduler_cycle = self.config['optimizer.use_single_scheduler_cycle'] == 'true'
 
-        cycle_metric_list = []
         for cycle in range(num_cycles):
             if self.gpu_id == 0:
                 model = self.model.module if self.distributed else self.model
