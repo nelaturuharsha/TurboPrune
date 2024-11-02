@@ -150,11 +150,11 @@ def TriangularSchedule(epochs_per_level, lr_start, lr_peak, lr_end, optimizer, s
     assert lr_peak > lr_start
 
     if single_scheduler_cycle:
-        assert config['cyclic_training.total_training_budget'] is not None, "Total training budget must be specified for single scheduler cycle"
-        total_training_budget = config['cyclic_training.total_training_budget']
+        assert config['prune_params.total_training_budget'] is not None, "Total training budget must be specified for single scheduler cycle"
+        total_training_budget = config['prune_params.total_training_budget']
         if total_training_budget == 0:
             from utils.harness_utils import generate_densities
-            total_training_budget = len(generate_densities()) * epochs_per_level
+            total_training_budget = len(generate_densities(current_sparsity=0.0)) * epochs_per_level
         total_train_steps = total_training_budget * steps_per_epoch
     else:
         total_train_steps = epochs_per_level * steps_per_epoch

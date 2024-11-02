@@ -172,10 +172,10 @@ def save_config(expt_dir: str, config: Any) -> None:
         yaml.dump(nested_dict, file, default_flow_style=False)
 
 
-@param('cyclic_training.strategy')
-@param('cyclic_training.total_training_budget')
+@param('prune_params.epoch_schedule_strategy')
+@param('prune_params.total_training_budget')
 @param('cyclic_training.epochs_per_level')
-def generate_level_schedule(strategy: str, total_training_budget: int, epochs_per_level, num_levels: int = None) -> list[int]:
+def generate_level_schedule(epoch_schedule_strategy: str, total_training_budget: int, epochs_per_level, num_levels: int = None) -> list[int]:
     """
     Generates a schedule of epochs per level based on the given strategy.
     
@@ -193,55 +193,55 @@ def generate_level_schedule(strategy: str, total_training_budget: int, epochs_pe
     assert num_levels is not None, "Number of levels must be provided"
     
      # Ensure either total_training_budget or epochs_per_level is provided
-    if total_training_budget is 0 and epochs_per_level is None:
+    if total_training_budget == 0 and epochs_per_level is None:
         raise ValueError("Either total_training_budget or epochs_per_level must be specified")
 
     # Calculate total_training_budget if only epochs_per_level is provided
-    if total_training_budget is 0:
+    if total_training_budget == 0:
         total_training_budget = num_levels * epochs_per_level
+        print('actually generating the budget')
         print(f"Total training budget is {total_training_budget}")
 
-
-    strategy = 'constant'
+    epoch_schedule_strategy = 'constant'
         
-    if strategy == 'linear_decrease':
+    if epoch_schedule_strategy == 'linear_decrease':
         step = total_training_budget / (num_levels * (num_levels + 1) / 2)
         epochs = [int(step * (num_levels - i)) for i in range(num_levels)]
 
-    elif strategy == 'linear_increase':
+    elif epoch_schedule_strategy == 'linear_increase':
         step = total_training_budget / (num_levels * (num_levels + 1) / 2)
         epochs = [int(step * (i + 1)) for i in range(num_levels)]
 
-    elif strategy == 'exponential_decrease':
+    elif epoch_schedule_strategy == 'exponential_decrease':
         factor = 0.5 ** (1 / (num_levels - 1)) if num_levels > 1 else 1
         total_factor = sum(factor ** i for i in range(num_levels))
         epochs = [int(total_training_budget * (factor ** i) / total_factor) for i in range(num_levels)]
 
-    elif strategy == 'exponential_increase':
+    elif epoch_schedule_strategy == 'exponential_increase':
         factor = 2 ** (1 / (num_levels - 1)) if num_levels > 1 else 1
         total_factor = sum(factor ** i for i in range(num_levels))
         epochs = [int(total_training_budget * (factor ** i) / total_factor) for i in range(num_levels)]
 
-    elif strategy == 'cyclic_peak':
+    elif epoch_schedule_strategy == 'cyclic_peak':
         mid_point = num_levels // 2
         increase_step = total_training_budget / (mid_point * (mid_point + 1) / 2)
         decrease_step = total_training_budget / ((num_levels - mid_point) * (num_levels - mid_point + 1) / 2)
         epochs = [int(increase_step * (i + 1)) for i in range(mid_point)]
         epochs += [int(decrease_step * (num_levels - i)) for i in range(mid_point, num_levels)]
 
-    elif strategy == 'alternating':
+    elif epoch_schedule_strategy == 'alternating':
         high = total_training_budget // (num_levels // 2 + num_levels % 2)
         low = total_training_budget // (2 * (num_levels // 2 + num_levels % 2))
         epochs = [high if i % 2 == 0 else low for i in range(num_levels)]
 
-    elif strategy == 'plateau':
+    elif epoch_schedule_strategy == 'plateau':
         increase_levels = num_levels // 2
         plateau_levels = num_levels - increase_levels
         increase_step = total_training_budget / (increase_levels * (increase_levels + 1) / 2)
         epochs = [int(increase_step * (i + 1)) for i in range(increase_levels)]
         epochs += [total_training_budget // num_levels for _ in range(plateau_levels)]
 
-    elif strategy == 'constant' or strategy == 'single':
+    elif epoch_schedule_strategy == 'constant':
         epochs = [total_training_budget // num_levels for _ in range(num_levels)]
 
     current_total = sum(epochs)

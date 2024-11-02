@@ -7,29 +7,30 @@ dataset:
   num_workers: 16
   data_root_dir: ./experiments
 prune_params:
-  prune_method: mag
   prune_rate: 0.2
+  prune_method: mag
   target_sparsity: 0.999
+  total_training_budget: 0
+  epoch_schedule_strategy: constant
 experiment_params:
-  base_dir: ./experiments 
   seed: 0
+  base_dir: ./experiments 
   training_type: lrr
   training_precision: bfloat16
-  use_compile: 'false'
-  compute_metrics: 'true'
 optimizer:
-  scheduler_type: TriangularSchedule
-  weight_decay: 1e-3
+  lr: 0.2
   momentum: 0.9
+  weight_decay: 1e-3
+  scheduler_type: TriangularSchedule
   lr_start: 0.2
   lr_peak: 1
   lr_end: 0.01
   skip_warmup: 'false'
+  use_single_scheduler_cycle: 'false'
 cyclic_training:
-  num_cycles: 1 
   epochs_per_level: 150
+  num_cycles: 1 
   strategy: constant
-  total_training_budget: 0
 wandb_params:
   project_name: placeholder
 dist_params:
