@@ -123,12 +123,12 @@ def step_trapezoidal(it, lr, num_iterations, warmup_iters, warmdown_iters):
     else:
         decay_ratio = (num_iterations - it) / warmdown_iters
         return decay_ratio
-
 @param("experiment_params.epochs_per_level")
 @param('optimizer.lr_start')
 @param('optimizer.lr_peak')
 @param('optimizer.lr_end')
-def TriangularSchedule(epochs_per_level, lr_start, lr_peak, lr_end, optimizer,  steps_per_epoch, skip_warmup: bool = False):
+@param('optimizer.skip_warmup')
+def TriangularSchedule(epochs_per_level, lr_start, lr_peak, lr_end, optimizer, steps_per_epoch, epochs_so_far, skip_warmup: bool = False):
     """Triangular learning rate schedule. Best performance with CIFAR10.
     credits: https://x.com/kellerjordan0/status/1776701859669172398
 
@@ -136,14 +136,23 @@ def TriangularSchedule(epochs_per_level, lr_start, lr_peak, lr_end, optimizer,  
         optimizer (Optimizer): Wrapped optimizer.
         epochs_per_level (int): Number of epochs per level.
         steps_per_epoch (int): Number of steps per epoch.
+        epochs_so_far (int): Number of epochs so far.
         skip_warmup (bool): If True, skip the warmup phase and start at peak_lr.
     Returns:
         torch.optim.lr_scheduler.LambdaLR: Lambda learning rate scheduler.
     """
+
+    config = get_current_config()
+    single_scheduler_cycle = config['optimizer.use_single_scheduler_cycle'] == 'true'
+
     assert lr_peak > lr_end
     assert lr_peak > lr_start
 
-    total_train_steps = epochs_per_level * steps_per_epoch
+    if single_scheduler_cycle:
+        assert config['cyclic_training.total_training_budget'] is not None, "Total training budget must be specified for single scheduler cycle"
+        total_train_steps = config['cyclic_training.total_training_budget'] * steps_per_epoch
+    else:
+        total_train_steps = epochs_per_level * steps_per_epoch
     
     if skip_warmup:
         print('$$$')
@@ -157,6 +166,17 @@ def TriangularSchedule(epochs_per_level, lr_start, lr_peak, lr_end, optimizer,  
         lr_schedule = np.interp(np.arange(1+total_train_steps), [0, int(lr_start * total_train_steps), total_train_steps], [lr_start, lr_peak, lr_end])
  
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_schedule.__getitem__)
+    
+    if single_scheduler_cycle and epochs_so_far > 0:
+        print(f'resuming from epoch {epochs_so_far}')
+        scheduler.last_epoch = (epochs_so_far * steps_per_epoch) - 1
+        
+        '''schedule_path = './debug_lr_schedule.txt'
+        with open(schedule_path, 'a') as f:
+            f.write(f'Current step: {scheduler.last_epoch}\n')
+            f.write(f'Current LR: {lr_schedule[scheduler.last_epoch]}\n')
+        print(f'Saved LR schedule debug info to {schedule_path}')
+        '''
     return scheduler
 
 @param("optimizer.epochs_per_level")

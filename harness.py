@@ -40,12 +40,9 @@ torch.backends.cudnn.allow_tf32 = True
 
 torch._dynamo.config.guard_nn_modules=True
 
-
-## (1) Length (2) Starting LR (3) Peak and (4) End LR 
-## more seeds
-## compute max eigenvalue after every cycle
-## compute perturbation after every cycle
-## compute perturbation after first epoch
+### add single level budget -> extracted from budgeted schedule
+### add multiple cycles v/s single cycle -> extracted from cycle schedule
+### add sign based perturbation at cycle start/level
 
 class Harness:
     """Harness class to handle training and evaluation.
@@ -119,7 +116,7 @@ class Harness:
     @param("optimizer.weight_decay")
     @param("optimizer.scheduler_type")
     def create_optimizers(
-        self, lr: float, momentum: float, weight_decay: float, scheduler_type: str, epochs_per_level: int, skip_warmup: bool
+        self, lr: float, momentum: float, weight_decay: float, scheduler_type: str, epochs_per_level: int, skip_warmup: bool, epochs_so_far: int = 0
     ) -> None:
         """Instantiate the optimizer and learning rate scheduler.
 
@@ -146,7 +143,7 @@ class Harness:
                 scheduler = getattr(schedulers, scheduler_type)            
                 
                 if scheduler_type == 'TriangularSchedule':
-                    self.scheduler = scheduler(optimizer=self.optimizer, steps_per_epoch=len(self.train_loader), epochs_per_level=epochs_per_level, skip_warmup=skip_warmup)
+                    self.scheduler = scheduler(optimizer=self.optimizer, steps_per_epoch=len(self.train_loader), epochs_per_level=epochs_per_level, skip_warmup=skip_warmup, epochs_so_far=epochs_so_far)
                 elif scheduler_type == 'TrapezoidalSchedule':
                     self.scheduler = scheduler(optimizer=self.optimizer, steps_per_epoch=len(self.train_loader),
                                                 warmup_steps=len(self.train_loader) * self.config['optimizer.warmup_steps'],
@@ -200,6 +197,12 @@ class Harness:
 
                 if self.scheduler is not None and self.config['optimizer.scheduler_type'] != 'MultiStepLRWarmup':
                     self.scheduler.step()
+                    '''if epoch == 0:
+                        schedule_path = './debug_lr_schedule.txt'
+                        with open(schedule_path, 'a') as f:
+                            f.write(f'Current step at LR: {self.scheduler.last_epoch}\n')
+                        print(f'Saved LR schedule debug info to {schedule_path}')
+                    '''
                 progress.update(task, advance=1)
                 
         if self.config["optimizer.scheduler_type"] == 'MultiStepLRWarmup':
@@ -246,9 +249,15 @@ class Harness:
         return test_loss, accuracy
     
     @param("cyclic_training.num_cycles")
-    def train_one_level(self, num_cycles: int, level: int) -> None: 
+    def train_one_level(self, num_cycles: int, epochs_per_level: int, level: int, epochs_so_far: int = 0) -> None:
+        
+        use_cyclic_training = num_cycles > 1
+
         level_metrics = {'cycle': [], 'epoch': [], 'train_loss': [], 'test_loss': [], 'train_acc': [], 'test_acc': []}
-        epoch_schedule = generate_budgeted_schedule()
+        
+        epoch_schedule = generate_cyclical_schedule(epochs_per_level=epochs_per_level) if use_cyclic_training else [epochs_per_level]
+        single_scheduler_cycle = self.config['optimizer.use_single_scheduler_cycle'] == 'true'
+
         cycle_metric_list = []
         for cycle in range(num_cycles):
             if self.gpu_id == 0:
@@ -256,12 +265,22 @@ class Harness:
                 self.cycle_info = {
                     'Number of Cycles': num_cycles, 'Epochs per Cycle': epoch_schedule,
                     'Total Training Length': f"{sum(epoch_schedule)} epochs", "Training Cycle": f"{cycle + 1}/{num_cycles}",
-                    "Epochs this cycle": f"{epoch_schedule[cycle]}", "Total epochs so far": f"{sum(epoch_schedule[:cycle+1])}/{sum(epoch_schedule)}",
+                    "Epochs this cycle": f"{epoch_schedule[cycle]}", "Total epochs so far": f"{epochs_so_far + sum(epoch_schedule[:cycle+1])}/{sum(epoch_schedule)}",
                     "Current Sparsity": f"{model.get_overall_sparsity():.4f}"
                 } 
-            epoch_iter = [1, epoch_schedule[cycle] - 1]
+        
+            if epoch_schedule[cycle] <= 2:
+                epoch_iter = [0, epoch_schedule[cycle] - 1]
+            else:
+                epoch_iter = [1, epoch_schedule[cycle] - 1]
+
             skip_warmup = True if (cycle != 0 and self.config['optimizer.skip_warmup'] == 'true') else False
-            self.create_optimizers(epochs_per_level=epoch_schedule[cycle], skip_warmup=skip_warmup)
+
+            if single_scheduler_cycle:
+                self.create_optimizers(epochs_per_level=epoch_schedule[cycle], skip_warmup=skip_warmup, epochs_so_far=epochs_so_far)
+            else:
+                self.create_optimizers(epochs_per_level=epoch_schedule[cycle], skip_warmup=skip_warmup)
+            
             if self.gpu_id == 0:
                 display_training_info(cycle_info=self.cycle_info, training_info=self.training_info, optimizer_info=self.optimizer_info)
                 if cycle == 0 and level == 0:
@@ -270,21 +289,26 @@ class Harness:
                 elif level != 0:
                     self.console.print(f"[bold cyan]Loading optimizer state for level {level}, cycle {cycle}[/bold cyan]")
                     self.optimizer.load_state_dict(torch.load(os.path.join(self.expt_dir, "artifacts", "optimizer_init.pt")))
-            cycle_metric_stuff = {}
+            
             for epoch in range(epoch_schedule[cycle]):
                 self.epoch_counter += 1
                 train_loss, train_acc = self.train_one_epoch(epoch)
                 test_loss, test_acc = self.test()
 
                 if (epoch in epoch_iter) and self.config['experiment_params.compute_metrics']:
-                    cycle_metric_stuff[f'epoch_{epoch}_test_acc'] = test_acc
-                    cycle_metric_stuff[f'epoch_{epoch}_max_eig'] = hessian_max_eigenvalue(self.model, self.train_loader)
-                    cycle_metric_stuff[f'epoch_{epoch}_current_epoch'] = self.epoch_counter
-                    if not 'epochs_iter' in cycle_metric_stuff:
-                        cycle_metric_stuff['epochs_iter'] = []
-                    if not 'cycle_num' in cycle_metric_stuff:
-                        cycle_metric_stuff['cycle_num'] = cycle
-                    cycle_metric_stuff['epochs_iter'].append(epoch)
+                    metrics_data = {
+                        'global_epoch': self.epoch_counter,
+                        'level': level,
+                        'cycle': cycle,
+                        'epoch': epoch, 
+                        'test_acc': test_acc,
+                        'max_eig': hessian_max_eigenvalue(self.model, self.train_loader),
+                    }
+                    
+                    metrics_path = os.path.join(self.expt_dir, 'metrics', f'cycle_metrics_{self.prefix}.csv')
+                    pd.DataFrame([metrics_data]).to_csv(metrics_path, mode='a', header=not os.path.exists(metrics_path), index=False)
+                    
+
                 for key, value in zip(['cycle', 'epoch', 'train_loss', 'test_loss', 'train_acc', 'test_acc'],
                                       [cycle, self.epoch_counter, train_loss, test_loss, train_acc, test_acc]):
                     level_metrics[key].append(value)
@@ -317,14 +341,12 @@ class Harness:
                         save_model(self.model, os.path.join(self.expt_dir, "checkpoints", "model_rewind.pt"), distributed=self.distributed)
                         torch.save(self.optimizer.state_dict(), os.path.join(self.expt_dir, "artifacts", "optimizer_rewind.pt"))
             
-            cycle_metric_list.append(cycle_metric_stuff)
 
             if self.gpu_id == 0:
                 save_metrics_and_update_summary(self.console, self.model, self.expt_dir, self.prefix, level, level_metrics, num_cycles, epoch_schedule)
                 save_model(self.model, os.path.join(self.expt_dir, "checkpoints", f"model_level_{level}_cycle_{cycle}.pt"), distributed=self.distributed)
                 self.console.print(f"[bold cyan]Saved checkpoint for level {level}, cycle {cycle}[/bold cyan]")
-        if self.compute_metrics:
-            compute_lr_perturbation(level, cycle_metric_list, self.expt_dir, self.prefix)
+        
         if self.gpu_id == 0:
             model = self.model.module if self.distributed else self.model
             save_metrics_and_update_summary(self.console, model, self.expt_dir, self.prefix, level, level_metrics, num_cycles, epoch_schedule)
@@ -341,7 +363,7 @@ def initialize_config():
 def main():
     """Main function for distributed training."""
     config = initialize_config()
-    use_distributed = config['dist_params.distributed'] and torch.cuda.device_count() > 1 and not config['dataset.dataset_name'].startswith("cifar")
+    use_distributed = config['dist_params.distributed'] == 'true' and torch.cuda.device_count() > 1 and not config['dataset.dataset_name'].startswith("cifar")
     set_seed()
 
     if use_distributed:
@@ -394,8 +416,12 @@ def main():
 
     resume_level = config["experiment_params.resume_level"]
     densities = generate_densities(current_sparsity=prune_harness.model.get_overall_sparsity())
-    at_init = True if config['prune_params.at_init'] == 'true' else False
+    level_schedule = generate_level_schedule(num_levels=len(densities))
+    print('level schedule', level_schedule)
+    
+    at_init = config['prune_params.prune_method'] in ['snip', 'er_erk', 'synflow', 'er_balanced']
     print('at init in harness', at_init)
+    epoch_so_far = 0
     for level in range(resume_level, len(densities)):
         if rank == 0:
             if (level != 0) and (not at_init):
@@ -432,8 +458,8 @@ def main():
         if level == 0 and rank == 0:
             save_model(harness.model, os.path.join(packaged[1], "checkpoints", "model_init.pt"), distributed=use_distributed)
 
-        harness.train_one_level(level=level)
-
+        harness.train_one_level(epochs_per_level=level_schedule[level], level=level, epochs_so_far=epoch_so_far)
+        epoch_so_far += level_schedule[level]
         if rank == 0:
             save_model(harness.model, os.path.join(packaged[1], "checkpoints", f"model_level_{level}.pt"), distributed=use_distributed)
             console.print(f"[bold green]Training level {level} complete, moving on to {level+1}[/bold green]")

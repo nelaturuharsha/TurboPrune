@@ -10,7 +10,6 @@ prune_params:
   prune_method: mag
   prune_rate: 0.2
   target_sparsity: 0.999
-  at_init: 'false'
 experiment_params:
   base_dir: ./experiments 
   seed: 0

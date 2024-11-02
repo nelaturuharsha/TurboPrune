@@ -105,7 +105,58 @@ def compute_lr_perturbation(level, metric_list, expt_dir, prefix):
         cycle_branch.add(f"Epochs: {current_print_epoch} -> {next_print_epoch}", style="magenta")
         cycle_branch.add(f"Accuracy: {current_acc:.2f} -> {next_acc:.2f} (Δ: {delta_acc:.2f})", style="yellow")
         cycle_branch.add(f"Max Eigenvalue: {current_max_eig:.2f} -> {next_max_eig:.2f} (Δ: {delta_max_eig:.2f})", style="green")
+def compute_lr_perturbation(level, metric_list, expt_dir, prefix):
+    console = Console()
+    perturbation_tree = Tree("Perturbation Metrics")
 
+    for i in range(len(metric_list) - 1):
+        current_metric = metric_list[i]
+        next_metric = metric_list[i + 1]
+
+        current_cycle = current_metric['cycle_num']
+        next_cycle = next_metric['cycle_num']
+        # Extract relevant data
+        _, current_epoch = current_metric['epochs_iter']
+        next_epoch, _ = next_metric['epochs_iter']
+
+        current_print_epoch = current_metric[f'epoch_{current_epoch}_current_epoch']
+        next_print_epoch = next_metric[f'epoch_{next_epoch}_current_epoch']
+
+        current_acc = current_metric[f'epoch_{current_epoch}_test_acc']
+        next_acc = next_metric[f'epoch_{next_epoch}_test_acc']
+
+        current_max_eig = current_metric[f'epoch_{current_epoch}_max_eig']
+        next_max_eig = next_metric[f'epoch_{next_epoch}_max_eig']
+
+        delta_acc = next_acc - current_acc
+        delta_max_eig = next_max_eig - current_max_eig
+
+        data = {
+            'level': level,
+            'prev_cycle': current_cycle,
+            'next_cycle': next_cycle,
+            'prev_epoch': current_print_epoch,
+            'next_epoch': next_print_epoch,
+            'prev_acc': f'{current_acc:.4f}',
+            'next_acc': f'{next_acc:.4f}',
+            'prev_max_eig': f'{current_max_eig:.4f}',
+            'next_max_eig': f'{next_max_eig:.4f}',
+            'delta_acc': f'{delta_acc:.4f}',
+            'delta_max_eig': f'{delta_max_eig:.4f}'
+        }
+
+        # Write to CSV
+        csv_path = os.path.join(expt_dir, 'metrics', f'{prefix}_perturbation_metrics.csv')
+        pd.DataFrame([data]).to_csv(csv_path, mode='a', header=not os.path.exists(csv_path), index=False)
+
+        # Add to tree for printing
+        cycle_branch = perturbation_tree.add(f"Level {level}, Cycle {current_cycle} -> Cycle {next_cycle}", style="cyan")
+        cycle_branch.add(f"Epochs: {current_print_epoch} -> {next_print_epoch}", style="magenta")
+        cycle_branch.add(f"Accuracy: {current_acc:.2f} -> {next_acc:.2f} (Δ: {delta_acc:.2f})", style="yellow")
+        cycle_branch.add(f"Max Eigenvalue: {current_max_eig:.2f} -> {next_max_eig:.2f} (Δ: {delta_max_eig:.2f})", style="green")
+
+    # Print the tree
+    console.print(Panel(perturbation_tree, title="Perturbation Metrics", border_style="cyan"))
     # Print the tree
     console.print(Panel(perturbation_tree, title="Perturbation Metrics", border_style="cyan"))
 

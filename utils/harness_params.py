@@ -28,7 +28,6 @@ def get_current_params() -> None:
             required=True,
         ),
         target_sparsity=Param(float, 'target sparsity of the entire pruning cycle', required=True),
-        at_init=Param(str, 'whether to prune at initialization', default='false')
     )
 
     Section("experiment_params", "parameters to train model").params(
@@ -69,7 +68,8 @@ def get_current_params() -> None:
         lr_start=Param(float, "start learning rate", required=True  ),
         lr_peak=Param(float, "peak learning rate", required=True),
         lr_end=Param(float, "end learning rate", required=True),
-        skip_warmup=Param(str, "skip warmup", default='false')
+        skip_warmup=Param(str, "skip warmup", default='false'),
+        use_single_scheduler_cycle=Param(str, "use single scheduler cycle", default='false')
     )
 
     Section("dist_params", "distributed parameters").params(
@@ -80,6 +80,7 @@ def get_current_params() -> None:
         num_cycles=Param(int, "number of cycles used for cyclic training", default=1),
         strategy=Param(And(str, OneOf(['linear_increase', 'linear_decrease', 'exponential_decrease', 
                                       'exponential_increase', 'cyclic_peak', 'alternating', 'plateau', 'constant'])), default='constant'),
+        total_training_budget=Param(int, "total training budget")
         )
     
     Section('wandb_params', 'parameters for wandb').params(

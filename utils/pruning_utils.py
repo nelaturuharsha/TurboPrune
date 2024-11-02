@@ -83,16 +83,13 @@ class PruningStuff:
         return model
 
     @param("prune_params.prune_method")
-    @param('prune_params.at_init')
-    def prune_the_model(self, prune_method: str, target_density: float, at_init: str) -> None:
+    def prune_the_model(self, prune_method: str, target_density: float) -> None:
         """Prune the model using the specified method and density.
 
         Args:
             prune_method (str): Method of pruning.
             target_density (float): Desired density after pruning.
         """
-
-        at_init = True if at_init == 'true' else False
         init_sparsity = self.model.get_overall_sparsity()
 
         prune_method_name = f"prune_{prune_method}"
@@ -117,10 +114,7 @@ class PruningStuff:
         if prune_method.startswith("er_"):
             self.console.print("[bold yellow]Pruning at initialization completed.[/bold yellow]")
         elif prune_method in ["mag", "random_erk", "random_balanced"]:
-            if at_init:
-                self.console.print("[bold yellow]Pruning at initialization completed.[/bold yellow]")
-            else:
-                self.console.print("[bold yellow]Level pruning completed.[/bold yellow]")
+            self.console.print("[bold yellow]Level pruning completed.[/bold yellow]")
 
     def load_from_ckpt(self, path: str) -> None:
         """Load the model from a checkpoint.

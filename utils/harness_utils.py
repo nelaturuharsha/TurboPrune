@@ -123,15 +123,13 @@ def set_seed(seed: int, is_deterministic: bool = False) -> None:
     os.environ["PYTHONHASHSEED"] = str(seed)
     print(f"Random seed set as {seed}")
 
-@param("prune_params.at_init")
 @param("prune_params.prune_method")
-@param("prune_params.target_sparsity")
+@param("prune_params.target_sparsity") 
 @param("prune_params.prune_rate")
-def generate_densities(at_init: str, prune_method: str, target_sparsity: float, prune_rate: float, current_sparsity: float) -> list[float]:
+def generate_densities(prune_method: str, target_sparsity: float, prune_rate: float, current_sparsity: float) -> list[float]:
     """Generate a list of densities for pruning. The density is calculated as
        (1 - prune_rate) ^ i multiplied by current_sparsity until target_sparsity is reached.
     Args:
-        at_init (bool): Whether to generate densities at initialization.
         prune_method (str): Method of pruning.
         target_sparsity (float): The target sparsity to reach.
         current_sparsity (float): The current density (1 - current_sparsity).
@@ -139,22 +137,18 @@ def generate_densities(at_init: str, prune_method: str, target_sparsity: float, 
     Returns:
         list[float]: List of densities until target sparsity is reached.
     """
-    at_init = True if at_init == 'true' else False
+    
     if prune_method in ['mag', 'random_erk', 'random_balanced']:
-        if at_init:
-            return [1-target_sparsity]
-        else:
-            densities = []
-            current_density = 1 - current_sparsity
-            target_density = 1 - target_sparsity
-            while current_density > target_density:
-                densities.append(current_density)
-                current_density *= (1 - prune_rate)
-            if current_density <= target_density:
-                densities.append(current_density)
-            return densities
-    elif prune_method in  ['er_erk', 'er_balanced', 'synflow', 'snip']:
-        assert at_init, "This pruning method can only be used for pruning at initialization."
+        densities = []
+        current_density = 1 - current_sparsity
+        target_density = 1 - target_sparsity
+        while current_density > target_density:
+            densities.append(current_density)
+            current_density *= (1 - prune_rate)
+        if current_density <= target_density:
+            densities.append(current_density)
+        return densities
+    elif prune_method in ['er_erk', 'er_balanced', 'synflow', 'snip']:
         return [1 - target_sparsity]
     elif prune_method == 'just dont':
         return [1.0]
@@ -178,70 +172,89 @@ def save_config(expt_dir: str, config: Any) -> None:
         yaml.dump(nested_dict, file, default_flow_style=False)
 
 
-@param('cyclic_training.min_epochs')
-@param('cyclic_training.max_epochs')
-@param('cyclic_training.num_cycles')
 @param('cyclic_training.strategy')
-def generate_epoch_schedule(min_epochs, max_epochs, num_cycles, strategy):
+@param('cyclic_training.total_training_budget')
+def generate_level_schedule(strategy: str, total_training_budget: int, num_levels: int = None) -> list[int]:
     """
-    Generates a schedule of epochs per cycle based on the given strategy.
+    Generates a schedule of epochs per level based on the given strategy.
     
-    Parameters:
-    - min_epochs (int): Minimum number of epochs.
-    - max_epochs (int): Maximum number of epochs.
-    - num_cycles (int): Number of cycles.
-    - strategy (str): Strategy for epoch scheduling. Options are:
+    Args:
+        strategy (str): Strategy for epoch scheduling. Options are:
                       'linear_decrease', 'linear_increase', 'exponential_decrease',
                       'exponential_increase', 'cyclic_peak', 'alternating', 'plateau'.
-                      
-    Returns:
-    - List[int]: A list of epochs for each cycle.
-    """
+        total_training_budget (int): Total number of epochs across all levels
+        num_levels (int, optional): Number of levels. Must be provided.
     
+    Returns:
+        list[int]: A list of epochs for each level
+    """
+    assert num_levels is not None, "Number of levels must be provided"
+
     if strategy == 'linear_decrease':
-        step = (max_epochs - min_epochs) / (num_cycles - 1)
-        epochs = [int(max_epochs - step * i) for i in range(num_cycles)]
+        step = total_training_budget / (num_levels * (num_levels + 1) / 2)
+        epochs = [int(step * (num_levels - i)) for i in range(num_levels)]
 
     elif strategy == 'linear_increase':
-        step = (max_epochs - min_epochs) / (num_cycles - 1)
-        epochs = [int(min_epochs + step * i) for i in range(num_cycles)]
+        step = total_training_budget / (num_levels * (num_levels + 1) / 2)
+        epochs = [int(step * (i + 1)) for i in range(num_levels)]
 
     elif strategy == 'exponential_decrease':
-        factor = (min_epochs / max_epochs) ** (1 / (num_cycles - 1))
-        epochs = [int(max_epochs * (factor ** i)) for i in range(num_cycles)]
+        factor = 0.5 ** (1 / (num_levels - 1)) if num_levels > 1 else 1
+        total_factor = sum(factor ** i for i in range(num_levels))
+        epochs = [int(total_training_budget * (factor ** i) / total_factor) for i in range(num_levels)]
 
     elif strategy == 'exponential_increase':
-        factor = (max_epochs / min_epochs) ** (1 / (num_cycles - 1))
-        epochs = [int(min_epochs * (factor ** i)) for i in range(num_cycles)]
+        factor = 2 ** (1 / (num_levels - 1)) if num_levels > 1 else 1
+        total_factor = sum(factor ** i for i in range(num_levels))
+        epochs = [int(total_training_budget * (factor ** i) / total_factor) for i in range(num_levels)]
 
     elif strategy == 'cyclic_peak':
-        mid_point = num_cycles // 2
-        increase_step = (max_epochs - min_epochs) / mid_point
-        decrease_step = (max_epochs - min_epochs) / (num_cycles - mid_point - 1)
-        epochs = [int(min_epochs + increase_step * i) for i in range(mid_point)]
-        epochs += [int(max_epochs - decrease_step * (i - mid_point)) for i in range(mid_point, num_cycles)]
+        mid_point = num_levels // 2
+        increase_step = total_training_budget / (mid_point * (mid_point + 1) / 2)
+        decrease_step = total_training_budget / ((num_levels - mid_point) * (num_levels - mid_point + 1) / 2)
+        epochs = [int(increase_step * (i + 1)) for i in range(mid_point)]
+        epochs += [int(decrease_step * (num_levels - i)) for i in range(mid_point, num_levels)]
 
     elif strategy == 'alternating':
-        high = max_epochs
-        low = min_epochs
-        epochs = [high if i % 2 == 0 else low for i in range(num_cycles)]
+        high = total_training_budget // (num_levels // 2 + num_levels % 2)
+        low = total_training_budget // (2 * (num_levels // 2 + num_levels % 2))
+        epochs = [high if i % 2 == 0 else low for i in range(num_levels)]
 
     elif strategy == 'plateau':
-        increase_cycles = num_cycles // 2
-        plateau_cycles = num_cycles - increase_cycles
-        increase_step = (max_epochs - min_epochs) / increase_cycles
-        epochs = [int(min_epochs + increase_step * i) for i in range(increase_cycles)]
-        epochs += [max_epochs for _ in range(plateau_cycles)]
+        increase_levels = num_levels // 2
+        plateau_levels = num_levels - increase_levels
+        increase_step = total_training_budget / (increase_levels * (increase_levels + 1) / 2)
+        epochs = [int(increase_step * (i + 1)) for i in range(increase_levels)]
+        epochs += [total_training_budget // num_levels for _ in range(plateau_levels)]
 
-    else:
-        epochs = [min_epochs for _ in range(num_cycles)]
+    elif strategy == 'constant' or strategy == 'single':
+        epochs = [total_training_budget // num_levels for _ in range(num_levels)]
 
+    current_total = sum(epochs)
+    if current_total > total_training_budget:
+        scaling_factor = total_training_budget / current_total
+        epochs = [int(epoch * scaling_factor) for epoch in epochs]
+        
+        current_total = sum(epochs)
+        excess = current_total - total_training_budget
+        if excess > 0:
+            reduction_per_epoch = excess // len(epochs)
+            remainder = excess % len(epochs)
+            epochs = [epoch - reduction_per_epoch for epoch in epochs]
+            for i in range(remainder):
+                epochs[i] -= 1
+    
+    remaining = total_training_budget - sum(epochs)
+    if remaining > 0:
+        for i in range(remaining):
+            epochs[i] += 1
+    
     return epochs
 
 @param('cyclic_training.epochs_per_level')
 @param('cyclic_training.num_cycles')
 @param('cyclic_training.strategy')
-def generate_budgeted_schedule(epochs_per_level, num_cycles, strategy):
+def generate_cyclical_schedule(epochs_per_level, num_cycles, strategy):
     """
     Generates a schedule of epochs per cycle based on the given strategy and total epoch budget.
     
@@ -255,46 +268,48 @@ def generate_budgeted_schedule(epochs_per_level, num_cycles, strategy):
     Returns:
     - List[int]: A list of epochs for each cycle.
     """
-    
-    if strategy == 'linear_decrease':
-        step = epochs_per_level / (num_cycles * (num_cycles + 1) / 2)
-        epochs = [int(step * (num_cycles - i)) for i in range(num_cycles)]
+    if num_cycles > 1:    
+        if strategy == 'linear_decrease':
+            step = epochs_per_level / (num_cycles * (num_cycles + 1) / 2)
+            epochs = [int(step * (num_cycles - i)) for i in range(num_cycles)]
 
-    elif strategy == 'linear_increase':
-        step = epochs_per_level / (num_cycles * (num_cycles + 1) / 2)
-        epochs = [int(step * (i + 1)) for i in range(num_cycles)]
+        elif strategy == 'linear_increase':
+            step = epochs_per_level / (num_cycles * (num_cycles + 1) / 2)
+            epochs = [int(step * (i + 1)) for i in range(num_cycles)]
 
-    elif strategy == 'exponential_decrease':
-        factor = 0.5 ** (1 / (num_cycles - 1))
-        total_factor = sum(factor ** i for i in range(num_cycles))
-        epochs = [int(epochs_per_level * (factor ** i) / total_factor) for i in range(num_cycles)]
+        elif strategy == 'exponential_decrease':
+            factor = 0.5 ** (1 / (num_cycles - 1))
+            total_factor = sum(factor ** i for i in range(num_cycles))
+            epochs = [int(epochs_per_level * (factor ** i) / total_factor) for i in range(num_cycles)]
 
-    elif strategy == 'exponential_increase':
-        factor = 2 ** (1 / (num_cycles - 1))
-        total_factor = sum(factor ** i for i in range(num_cycles))
-        epochs = [int(epochs_per_level * (factor ** i) / total_factor) for i in range(num_cycles)]
+        elif strategy == 'exponential_increase':
+            factor = 2 ** (1 / (num_cycles - 1))
+            total_factor = sum(factor ** i for i in range(num_cycles))
+            epochs = [int(epochs_per_level * (factor ** i) / total_factor) for i in range(num_cycles)]
 
-    elif strategy == 'cyclic_peak':
-        mid_point = num_cycles // 2
-        increase_step = epochs_per_level / (mid_point * (mid_point + 1) / 2)
-        decrease_step = epochs_per_level / ((num_cycles - mid_point) * (num_cycles - mid_point + 1) / 2)
-        epochs = [int(increase_step * (i + 1)) for i in range(mid_point)]
-        epochs += [int(decrease_step * (num_cycles - i)) for i in range(mid_point, num_cycles)]
+        elif strategy == 'cyclic_peak':
+            mid_point = num_cycles // 2
+            increase_step = epochs_per_level / (mid_point * (mid_point + 1) / 2)
+            decrease_step = epochs_per_level / ((num_cycles - mid_point) * (num_cycles - mid_point + 1) / 2)
+            epochs = [int(increase_step * (i + 1)) for i in range(mid_point)]
+            epochs += [int(decrease_step * (num_cycles - i)) for i in range(mid_point, num_cycles)]
 
-    elif strategy == 'alternating':
-        high = epochs_per_level // (num_cycles // 2 + num_cycles % 2)
-        low = epochs_per_level // (2 * (num_cycles // 2 + num_cycles % 2))
-        epochs = [high if i % 2 == 0 else low for i in range(num_cycles)]
+        elif strategy == 'alternating':
+            high = epochs_per_level // (num_cycles // 2 + num_cycles % 2)
+            low = epochs_per_level // (2 * (num_cycles // 2 + num_cycles % 2))
+            epochs = [high if i % 2 == 0 else low for i in range(num_cycles)]
 
-    elif strategy == 'plateau':
-        increase_cycles = num_cycles // 2
-        plateau_cycles = num_cycles - increase_cycles
-        increase_step = epochs_per_level / (increase_cycles * (increase_cycles + 1) / 2)
-        epochs = [int(increase_step * (i + 1)) for i in range(increase_cycles)]
-        epochs += [epochs_per_level // num_cycles for _ in range(plateau_cycles)]
+        elif strategy == 'plateau':
+            increase_cycles = num_cycles // 2
+            plateau_cycles = num_cycles - increase_cycles
+            increase_step = epochs_per_level / (increase_cycles * (increase_cycles + 1) / 2)
+            epochs = [int(increase_step * (i + 1)) for i in range(increase_cycles)]
+            epochs += [epochs_per_level // num_cycles for _ in range(plateau_cycles)]
 
+        elif strategy == 'constant':
+            epochs = [epochs_per_level // num_cycles for _ in range(num_cycles)]
     else:
-        epochs = [epochs_per_level // num_cycles for _ in range(num_cycles)]
+        epochs = [epochs_per_level]
 
     current_total = sum(epochs)
     if current_total > epochs_per_level:
