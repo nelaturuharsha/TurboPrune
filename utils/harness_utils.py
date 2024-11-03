@@ -93,10 +93,9 @@ def gen_expt_dir(
             "Either start from scratch, or provide a path to the checkpoint :)"
         )
 
-    if not os.path.exists(expt_dir):
-        os.makedirs(expt_dir)
-        for subdir in ['checkpoints', 'metrics', 'metrics/epochwise_metrics', 'artifacts']:
-            os.makedirs(os.path.join(expt_dir, subdir))
+    os.makedirs(expt_dir, exist_ok=True)
+    for subdir in ['checkpoints', 'metrics', 'metrics/epochwise_metrics', 'artifacts']:
+        os.makedirs(os.path.join(expt_dir, subdir), exist_ok=True)
 
     return prefix, expt_dir
 
