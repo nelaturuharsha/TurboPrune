@@ -40,12 +40,12 @@ class PruningStuff:
         self.console = Console()
         self.this_device = "cuda:0"
         self.config = get_current_config()
-        self.dataset_name = self.config['dataset.dataset_name']
-        self.distributed = True if self.config['dist_params.distributed'] == 'true' else False
+        self.dataset_name = self.config['dataset.dataset_name'].lower()
+        self.distributed = self.config['dist_params.distributed'] and torch.cuda.device_count() > 1 and not self.dataset_name.startswith("cifar")
         if self.distributed:
             self.rank = dist.get_rank()
 
-        if self.dataset_name.lower().startswith('cifar'):
+        if self.dataset_name.startswith('cifar'):
             self.loaders = AirbenchLoaders()
         else:
             self.batch_size = self.config['dataset.batch_size']
@@ -110,11 +110,6 @@ class PruningStuff:
         final = Panel(f"[cyan]{final_sparsity:.4f}[/cyan]", title="Final Sparsity")
         self.console.print(Columns([initial, final]))
         self.console.print(f"[bold green]Pruning completed using {prune_method} method![/bold green]")
-
-        if prune_method.startswith("er_"):
-            self.console.print("[bold yellow]Pruning at initialization completed.[/bold yellow]")
-        elif prune_method in ["mag", "random_erk", "random_balanced"]:
-            self.console.print("[bold yellow]Level pruning completed.[/bold yellow]")
 
     def load_from_ckpt(self, path: str) -> None:
         """Load the model from a checkpoint.

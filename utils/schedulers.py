@@ -125,11 +125,10 @@ def step_trapezoidal(it, lr, num_iterations, warmup_iters, warmdown_iters):
         return decay_ratio
 
 @param("experiment_params.epochs_per_level")
-@param('optimizer.lr_start')
-@param('optimizer.lr_peak')
-@param('optimizer.lr_end')
-@param('optimizer.skip_warmup')
-def TriangularSchedule(epochs_per_level, lr_start, lr_peak, lr_end, optimizer, steps_per_epoch, epochs_so_far, skip_warmup: bool = False):
+@param('optimizer.triangular_scheduler_stuff.lr_start')
+@param('optimizer.triangular_scheduler_stuff.lr_peak')
+@param('optimizer.triangular_scheduler_stuff.lr_end')
+def TriangularSchedule(epochs_per_level, lr_start, lr_peak, lr_end, optimizer, steps_per_epoch):
     """Triangular learning rate schedule. Best performance with CIFAR10.
     credits: https://x.com/kellerjordan0/status/1776701859669172398
 
@@ -144,49 +143,21 @@ def TriangularSchedule(epochs_per_level, lr_start, lr_peak, lr_end, optimizer, s
     """
 
     config = get_current_config()
-    single_scheduler_cycle = config['optimizer.use_single_scheduler_cycle'] == 'true'
 
     assert lr_peak > lr_end
     assert lr_peak > lr_start
 
-    if single_scheduler_cycle:
-        assert config['prune_params.total_training_budget'] is not None, "Total training budget must be specified for single scheduler cycle"
-        total_training_budget = config['prune_params.total_training_budget']
-        if total_training_budget == 0:
-            from utils.harness_utils import generate_densities
-            total_training_budget = len(generate_densities(current_sparsity=0.0)) * epochs_per_level
-        total_train_steps = total_training_budget * steps_per_epoch
-    else:
-        total_train_steps = epochs_per_level * steps_per_epoch
+    total_train_steps = epochs_per_level * steps_per_epoch
     
-    if skip_warmup:
-        print('$$$')
-        print(f'skipping warmup')
-        print('$$$')
-        lr_schedule = np.interp(np.arange(1+total_train_steps), [0, total_train_steps], [lr_peak, lr_end])
-    else:
-        print('$$$')
-        print(f'not skipping warmup')
-        print('$$$')
-        lr_schedule = np.interp(np.arange(1+total_train_steps), [0, int(lr_start * total_train_steps), total_train_steps], [lr_start, lr_peak, lr_end])
+    lr_schedule = np.interp(np.arange(1+total_train_steps), [0, int(lr_start * total_train_steps), total_train_steps], [lr_start, lr_peak, lr_end])
  
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_schedule.__getitem__)
     
-    if single_scheduler_cycle and epochs_so_far > 0:
-        print(f'resuming from epoch {epochs_so_far}')
-        scheduler.last_epoch = (epochs_so_far * steps_per_epoch) - 1
-        
-        '''schedule_path = './debug_lr_schedule.txt'
-        with open(schedule_path, 'a') as f:
-            f.write(f'Current step: {scheduler.last_epoch}\n')
-            f.write(f'Current LR: {lr_schedule[scheduler.last_epoch]}\n')
-        print(f'Saved LR schedule debug info to {schedule_path}')
-        '''
     return scheduler
 
-@param("optimizer.epochs_per_level")
-@param("optimizer.warmup_steps")
-@param("optimizer.cooldown_steps")
+@param("experiment_params.epochs_per_level")
+@param("optimizer.trapezoidal_scheduler_stuff.warmup_steps")
+@param("optimizer.trapezoidal_scheduler_stuff.cooldown_steps")
 @param("optimizer.lr")
 def TrapezoidalSchedule(epochs_per_level, warmup_steps, cooldown_steps, lr, optimizer, steps_per_epoch):
     total_train_steps = epochs_per_level * steps_per_epoch

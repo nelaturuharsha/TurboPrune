@@ -72,11 +72,10 @@ def gen_expt_dir(
         f"_{config['prune_params.prune_method']}"
         f"_{config['prune_params.target_sparsity']}"
         f"_seed_{config['experiment_params.seed']}"
-        f"_budget_{config['cyclic_training.epochs_per_level']}"
+        f"_budget_{config['experiment_params.epochs_per_level']}"
         f"_cycles_{config['cyclic_training.num_cycles']}"
         f"_strat_{config['cyclic_training.strategy']}"
-        f"_lr_{config['optimizer.lr_start']}-{config['optimizer.lr_peak']}-{config['optimizer.lr_end']}"
-        f"_skipwarmup_{config['optimizer.skip_warmup']}"
+        f"_lr_{config['optimizer.triangular_scheduler_stuff.lr_start']}-{config['optimizer.triangular_scheduler_stuff.lr_peak']}-{config['optimizer.triangular_scheduler_stuff.lr_end']}" if config['optimizer.scheduler_type'] == 'TriangularSchedule' else ""
     )
     
     if resume_level != 0 and resume_expt_name:
@@ -85,7 +84,7 @@ def gen_expt_dir(
     elif resume_level == 0 and resume_expt_name is None:
         current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
         unique_id = uuid.uuid4().hex[:6]
-        unique_name = f"{prefix}_{current_time}_{unique_id}"
+        unique_name = f"{prefix}__{unique_id}__{current_time}"
         expt_dir = os.path.join(base_dir, unique_name)
         print(f"Creating this Folder {expt_dir} :)")
     else:
@@ -171,100 +170,7 @@ def save_config(expt_dir: str, config: Any) -> None:
         yaml.dump(nested_dict, file, default_flow_style=False)
 
 
-@param('prune_params.epoch_schedule_strategy')
-@param('prune_params.total_training_budget')
-@param('cyclic_training.epochs_per_level')
-def generate_level_schedule(epoch_schedule_strategy: str, total_training_budget: int, epochs_per_level, num_levels: int = None) -> list[int]:
-    """
-    Generates a schedule of epochs per level based on the given strategy.
-    
-    Args:
-        strategy (str): Strategy for epoch scheduling. Options are:
-                      'linear_decrease', 'linear_increase', 'exponential_decrease',
-                      'exponential_increase', 'cyclic_peak', 'alternating', 'plateau'.
-        total_training_budget (int): Total number of epochs across all levels
-        epochs_per_level (int, optional): Number of epochs per level. Must be provided.
-        num_levels (int, optional): Number of levels. Must be provided.
-    
-    Returns:
-        list[int]: A list of epochs for each level
-    """
-    assert num_levels is not None, "Number of levels must be provided"
-    
-     # Ensure either total_training_budget or epochs_per_level is provided
-    if total_training_budget == 0 and epochs_per_level is None:
-        raise ValueError("Either total_training_budget or epochs_per_level must be specified")
-
-    # Calculate total_training_budget if only epochs_per_level is provided
-    if total_training_budget == 0:
-        total_training_budget = num_levels * epochs_per_level
-        print('actually generating the budget')
-        print(f"Total training budget is {total_training_budget}")
-
-    epoch_schedule_strategy = 'constant'
-        
-    if epoch_schedule_strategy == 'linear_decrease':
-        step = total_training_budget / (num_levels * (num_levels + 1) / 2)
-        epochs = [int(step * (num_levels - i)) for i in range(num_levels)]
-
-    elif epoch_schedule_strategy == 'linear_increase':
-        step = total_training_budget / (num_levels * (num_levels + 1) / 2)
-        epochs = [int(step * (i + 1)) for i in range(num_levels)]
-
-    elif epoch_schedule_strategy == 'exponential_decrease':
-        factor = 0.5 ** (1 / (num_levels - 1)) if num_levels > 1 else 1
-        total_factor = sum(factor ** i for i in range(num_levels))
-        epochs = [int(total_training_budget * (factor ** i) / total_factor) for i in range(num_levels)]
-
-    elif epoch_schedule_strategy == 'exponential_increase':
-        factor = 2 ** (1 / (num_levels - 1)) if num_levels > 1 else 1
-        total_factor = sum(factor ** i for i in range(num_levels))
-        epochs = [int(total_training_budget * (factor ** i) / total_factor) for i in range(num_levels)]
-
-    elif epoch_schedule_strategy == 'cyclic_peak':
-        mid_point = num_levels // 2
-        increase_step = total_training_budget / (mid_point * (mid_point + 1) / 2)
-        decrease_step = total_training_budget / ((num_levels - mid_point) * (num_levels - mid_point + 1) / 2)
-        epochs = [int(increase_step * (i + 1)) for i in range(mid_point)]
-        epochs += [int(decrease_step * (num_levels - i)) for i in range(mid_point, num_levels)]
-
-    elif epoch_schedule_strategy == 'alternating':
-        high = total_training_budget // (num_levels // 2 + num_levels % 2)
-        low = total_training_budget // (2 * (num_levels // 2 + num_levels % 2))
-        epochs = [high if i % 2 == 0 else low for i in range(num_levels)]
-
-    elif epoch_schedule_strategy == 'plateau':
-        increase_levels = num_levels // 2
-        plateau_levels = num_levels - increase_levels
-        increase_step = total_training_budget / (increase_levels * (increase_levels + 1) / 2)
-        epochs = [int(increase_step * (i + 1)) for i in range(increase_levels)]
-        epochs += [total_training_budget // num_levels for _ in range(plateau_levels)]
-
-    elif epoch_schedule_strategy == 'constant':
-        epochs = [total_training_budget // num_levels for _ in range(num_levels)]
-
-    current_total = sum(epochs)
-    if current_total > total_training_budget:
-        scaling_factor = total_training_budget / current_total
-        epochs = [int(epoch * scaling_factor) for epoch in epochs]
-        
-        current_total = sum(epochs)
-        excess = current_total - total_training_budget
-        if excess > 0:
-            reduction_per_epoch = excess // len(epochs)
-            remainder = excess % len(epochs)
-            epochs = [epoch - reduction_per_epoch for epoch in epochs]
-            for i in range(remainder):
-                epochs[i] -= 1
-    
-    remaining = total_training_budget - sum(epochs)
-    if remaining > 0:
-        for i in range(remaining):
-            epochs[i] += 1
-    
-    return epochs
-
-@param('cyclic_training.epochs_per_level')
+@param('experiment_params.epochs_per_level')
 @param('cyclic_training.num_cycles')
 @param('cyclic_training.strategy')
 def generate_cyclical_schedule(epochs_per_level, num_cycles, strategy):

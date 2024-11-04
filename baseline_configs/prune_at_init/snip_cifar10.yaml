@@ -8,12 +8,12 @@ dataset:
   data_root_dir: ./experiments
 prune_params:
   prune_rate: 0.2
-  prune_method: random_balanced 
-  target_sparsity: 0.999
+  prune_method: snip 
+  target_sparsity: 0.9
 experiment_params:
   seed: 0
   base_dir: ./experiments 
-  training_type: lrr
+  training_type: at_init
   training_precision: bfloat16
   epochs_per_level: 150
 optimizer:
