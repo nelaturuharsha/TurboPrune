@@ -1,7 +1,6 @@
 import os
 import uuid
 from datetime import datetime
-import prettytable
 import yaml
 from typing import Any, Dict, Optional, Tuple 
 
@@ -14,10 +13,11 @@ import torch
 from fastargs.decorators import param
 from fastargs import get_current_config
 
-from rich.console import Console
+from rich.console import Console, Group
 from rich.panel import Panel
 from rich.tree import Tree
 from rich.layout import Layout
+from rich.text import Text
 
 import wandb
 
@@ -46,11 +46,7 @@ def reset_optimizer(
     return optimizer
 
 @param("experiment_params.base_dir")
-@param("experiment_params.resume_level")
-@param("experiment_params.resume_expt_name")
-def gen_expt_dir(
-    base_dir: str, resume_level: int, resume_expt_name: Optional[str] = None
-) -> Tuple[str, str]:
+def gen_expt_dir(base_dir: str) -> Tuple[str, str]:
     """Create a new experiment directory and all the necessary subdirectories.
        If provided, instead of creating a new directory -- set the directory to the one provided.
 
@@ -78,19 +74,11 @@ def gen_expt_dir(
         f"_lr_{config['optimizer.triangular_scheduler_stuff.lr_start']}-{config['optimizer.triangular_scheduler_stuff.lr_peak']}-{config['optimizer.triangular_scheduler_stuff.lr_end']}" if config['optimizer.scheduler_type'] == 'TriangularSchedule' else ""
     )
     
-    if resume_level != 0 and resume_expt_name:
-        expt_dir = os.path.join(base_dir, resume_expt_name)
-        print(f"Resuming from Level -- {resume_level}")
-    elif resume_level == 0 and resume_expt_name is None:
-        current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
-        unique_id = uuid.uuid4().hex[:6]
-        unique_name = f"{prefix}__{unique_id}__{current_time}"
-        expt_dir = os.path.join(base_dir, unique_name)
-        print(f"Creating this Folder {expt_dir} :)")
-    else:
-        raise AssertionError(
-            "Either start from scratch, or provide a path to the checkpoint :)"
-        )
+    current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
+    unique_id = uuid.uuid4().hex[:6]
+    unique_name = f"{prefix}__{unique_id}__{current_time}"
+    expt_dir = os.path.join(base_dir, unique_name)
+    print(f"Creating this Folder {expt_dir} :)")
 
     os.makedirs(expt_dir, exist_ok=True)
     for subdir in ['checkpoints', 'metrics', 'metrics/epochwise_metrics', 'artifacts']:
@@ -276,8 +264,7 @@ def save_metrics_and_update_summary(console, model, expt_dir, prefix, level, lev
         "max_test_acc": new_data["max_test_acc"][0]
     })
 
-from rich.text import Text
-from rich.console import Group
+
 
 def display_training_info(cycle_info, training_info, optimizer_info):
     console = Console()
@@ -337,3 +324,18 @@ def save_model(model, save_path, distributed: bool):
 
     torch.save(model_to_save.state_dict(), save_path)
     print(f"Model saved to {save_path}")
+
+@param("experiment_params.resume_level")
+@param("experiment_params.resume_expt_name")
+@param("experiment_params.training_type")
+def resume_experiment(expt_dir: str, resume_level: int, resume_expt_name: str, training_type: str):
+    if resume_level != 0 and resume_expt_name:
+        expt_dir = os.path.join(expt_dir, resume_expt_name)
+        prefix = os.path.basename(expt_dir)
+        print(f"Resuming from Level -- {resume_level}")
+        
+        if training_type in ["imp", "wr", "lrr"]:
+            checkpoint_path = os.path.join(expt_dir, "checkpoints", f"model_level_{resume_level-1}.pt")
+            assert os.path.exists(checkpoint_path), f"Previous level checkpoint not found at {checkpoint_path}"
+    
+    return prefix, expt_dir

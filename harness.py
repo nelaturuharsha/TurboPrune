@@ -330,15 +330,15 @@ def initialize_config():
 def main():
     """Main function for distributed training."""
     config = initialize_config()
-    use_distributed = config['dist_params.distributed'] == 'true' and torch.cuda.device_count() > 1 and not config['dataset.dataset_name'].startswith("cifar")
+    use_distributed = (config['dist_params.distributed'] == 'true' 
+                      and torch.cuda.device_count() > 1 
+                      and not config['dataset.dataset_name'].startswith("cifar"))
     set_seed()
-
     if use_distributed:
         setup_distributed()
         rank, world_size = dist.get_rank(), dist.get_world_size()
     else:
         rank, world_size = 0, 1
-    
     console = Console()
 
     if rank == 0:
@@ -346,11 +346,13 @@ def main():
         console.print(f"[bold green]Training on {world_size} GPUs[/bold green]")
         wandb.init(project=config['wandb_params.project_name'])
         run_id = wandb.run.id
-        wandb.run.tags = wandb.run.tags + (config['dataset.dataset_name'].lower(),)
-        prefix, expt_dir = gen_expt_dir()
+        wandb.run.tags += (config['dataset.dataset_name'].lower(),)
+        resume_level = config["experiment_params.resume_level"]
+        prefix, expt_dir = (resume_experiment(config['experiment_params.base_dir'], resume_level,
+                                          config['experiment_params.resume_expt_name']) 
+                         if resume_level else gen_expt_dir())
         packaged = (prefix, expt_dir)
         save_config(expt_dir=expt_dir, config=config)
-
     else:
         run_id, packaged = None, None
 
@@ -362,68 +364,59 @@ def main():
     model = prune_harness.model
     
     if use_distributed:
-        if rank == 0:
-            state_dict = model.state_dict()
-        else:
-            state_dict = None
-        
-        state_dict = broadcast_object(state_dict)
-        
+        state_dict = broadcast_object(model.state_dict() if rank == 0 else None)
         model.load_state_dict(state_dict)
         models_equal = check_model_equality(model)
-
-    if use_distributed:
         if rank == 0:
-            if models_equal:
-                console.print("[bold green]Models are equal across all GPUs[/bold green]")
-            else:
-                console.print("[bold red]Models are not equal across all GPUs[/bold red]")
-
-    prune_harness = pruning_utils.PruningStuff(model=model)
-
-    resume_level = config["experiment_params.resume_level"]
-    densities = generate_densities(current_sparsity=prune_harness.model.get_overall_sparsity())
+            console.print(f"[bold {'green' if models_equal else 'red'}]Models are {'equal' if models_equal else 'not equal'} across all GPUs[/bold {'green' if models_equal else 'red'}]")
     
-    at_init = config['prune_params.prune_method'] in ['snip', 'er_erk', 'synflow', 'er_balanced']
-    for level in range(resume_level, len(densities)):
+    at_init = config['experiment_params.training_type'] == 'at_init'
+    prune_harness = pruning_utils.PruningStuff(model=model)
+    densities = generate_densities(current_sparsity=prune_harness.model.get_overall_sparsity())
+    densities = densities[resume_level:] if resume_level is not None else densities
+    
+    # Pre-compute paths to avoid repeated string concatenation
+    checkpoints_dir = os.path.join(packaged[1], "checkpoints")
+    model_init_path = os.path.join(checkpoints_dir, "model_init.pt")
+    
+    for level, density in enumerate(densities):
         if rank == 0:
-            if (level != 0) and (not at_init):
-                console.print(f"[bold cyan]Pruning Model at level: {level} to a target density of {densities[level]:.4f}[/bold cyan]")
-                prune_harness.model.load_model(os.path.join(packaged[1], "checkpoints", f"model_level_{level-1}.pt"))
-                prune_harness.prune_the_model(prune_method=config['prune_params.prune_method'], target_density=densities[level])
-                sparsity = prune_harness.model.get_overall_sparsity()
-                panel = Panel(f"[bold green]Model sparsity after pruning: {sparsity:.4f}[/bold green]", title="Sparsity", border_style="green", expand=False)
-                prune_harness.model.reset_weights(training_type=config['experiment_params.training_type'], expt_dir=packaged[1])
-                console.print(panel)
-            elif (level == 0) and (not at_init):
-                console.print(f'[bold cyan] Dense training homie! [/bold cyan]')
-            elif at_init:
+            if at_init:
                 console.print(f"[bold cyan]Pruning Model at initialization[/bold cyan]")
-                prune_harness.prune_the_model(prune_method=config['prune_params.prune_method'], target_density=densities[level])
-                sparsity = prune_harness.model.get_overall_sparsity()
-                panel = Panel(f"[bold green]Model sparsity after pruning: {sparsity:.4f}[/bold green]", title="Sparsity", border_style="green", expand=False)
-                console.print(panel)
+            elif level == 0:
+                console.print(f'[bold cyan]Dense training homie![/bold cyan]')
+                continue
             else:
-                raise ValueError('uh, idk what to do')
+                console.print(f"[bold cyan]Pruning Model at level: {level} to a target density of {density:.4f}[/bold cyan]")
+                model_level_path = os.path.join(checkpoints_dir, f"model_level_{level-1}.pt")
+                prune_harness.model.load_model(model_level_path)
+
+            if level != 0 or at_init:
+                prune_harness.prune_the_model(prune_method=config['prune_params.prune_method'], target_density=density)
+                sparsity = prune_harness.model.get_overall_sparsity()
+                panel = Panel(f"[bold green]Model sparsity after pruning: {sparsity:.4f}[/bold green]", 
+                            title="Sparsity", border_style="green", expand=False)
+                console.print(panel)
+                
+                if not at_init:
+                    prune_harness.model.reset_weights(training_type=config['experiment_params.training_type'], 
+                                                    expt_dir=packaged[1])
         
         if use_distributed:
             broadcast_model(prune_harness.model)
-        
-        if use_distributed:
-            models_equal = check_model_equality(prune_harness.model)
             if rank == 0:
-                if models_equal:
-                    console.print("[bold green]Models are equal across all GPUs[/bold green]")
-                else:
-                    console.print("[bold red]Models are not equal across all GPUs[/bold red]")
+                models_equal = check_model_equality(prune_harness.model)
+                console.print(f"[bold {'green' if models_equal else 'red'}]Models are {'equal' if models_equal else 'not equal'} across all GPUs[/bold {'green' if models_equal else 'red'}]")
+
         harness = Harness(model=prune_harness.model, expt_dir=packaged, gpu_id=rank)
 
         if level == 0 and rank == 0:
-            save_model(harness.model, os.path.join(packaged[1], "checkpoints", "model_init.pt"), distributed=use_distributed)
+            save_model(harness.model, model_init_path, distributed=use_distributed)
 
         harness.train_one_level(level=level)
         if rank == 0:
-            save_model(harness.model, os.path.join(packaged[1], "checkpoints", f"model_level_{level}.pt"), distributed=use_distributed)
+            model_level_path = os.path.join(checkpoints_dir, f"model_level_{level}.pt")
+            save_model(harness.model, model_level_path, distributed=use_distributed)
             console.print(f"[bold green]Training level {level} complete, moving on to {level+1}[/bold green]")
 
     if rank == 0:
