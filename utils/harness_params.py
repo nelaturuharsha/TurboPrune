@@ -37,8 +37,12 @@ def get_current_params() -> None:
         epochs_per_level=Param(int, 'maximum number of epochs each level is trained for', required=True),
         training_precision = Param(And(str, OneOf(['bfloat16', 'float32'])), default='bfloat16'),
         use_compile = Param(And(str, OneOf(['true', 'false'])), "use torch compile", default='false'),
-        resume_level=Param(int, "level to resume from -- 0 if starting afresh", default=0),
-        resume_expt_name=Param(str, "resume experiment name", default=None)
+        resume_experiment=Param(And(str, OneOf(['true', 'false'])), "resume experiment", default='false'),
+    )
+
+    Section('experiment_params.resume_experiment_stuff', 'parameters for resuming experiment').enable_if(lambda cfg: cfg['experiment_params.resume_experiment'] == 'true').params(
+        resume_level=Param(int, "level to resume from -- 0 if starting afresh", required=True),
+        resume_expt_name=Param(str, "resume experiment name", required=True)
     )
 
     Section("optimizer", "data related stuff").params(

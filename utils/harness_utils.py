@@ -325,8 +325,8 @@ def save_model(model, save_path, distributed: bool):
     torch.save(model_to_save.state_dict(), save_path)
     print(f"Model saved to {save_path}")
 
-@param("experiment_params.resume_level")
-@param("experiment_params.resume_expt_name")
+@param("experiment_params.resume_experiment_stuff.resume_level")
+@param("experiment_params.resume_experiment_stuff.resume_expt_name")
 @param("experiment_params.training_type")
 def resume_experiment(expt_dir: str, resume_level: int, resume_expt_name: str, training_type: str):
     if resume_level != 0 and resume_expt_name:

@@ -269,9 +269,9 @@ class Harness:
                     self.console.print(f"[bold cyan]Saving optimizer state for level {level}, cycle {cycle}[/bold cyan]")
                     torch.save(self.optimizer.state_dict(), os.path.join(self.expt_dir, "artifacts", "optimizer_init.pt"))
                 elif level != 0:
+                    self.optimizer.load_state_dict(torch.load(os.path.join(self.expt_dir, "artifacts", "optimizer_rewind.pt" if self.config['experiment_params.training_type'] == 'wr' else "optimizer_init.pt")))
                     self.console.print(f"[bold cyan]Loading optimizer state for level {level}, cycle {cycle}[/bold cyan]")
-                    self.optimizer.load_state_dict(torch.load(os.path.join(self.expt_dir, "artifacts", "optimizer_init.pt" if self.config['experiment_params.training_type'] == 'imp' else "optimizer_rewind.pt")))
-            
+
             for epoch in range(epoch_schedule[cycle]):
                 self.epoch_counter += 1
                 train_loss, train_acc = self.train_one_epoch(epoch)
@@ -347,10 +347,9 @@ def main():
         wandb.init(project=config['wandb_params.project_name'])
         run_id = wandb.run.id
         wandb.run.tags += (config['dataset.dataset_name'].lower(),)
-        resume_level = config["experiment_params.resume_level"]
-        prefix, expt_dir = (resume_experiment(config['experiment_params.base_dir'], resume_level,
-                                          config['experiment_params.resume_expt_name']) 
-                         if resume_level else gen_expt_dir())
+        prefix, expt_dir = (resume_experiment(config['experiment_params.base_dir'], config['experiment_params.resume_experiment_stuff.resume_level'],
+                                          config['experiment_params.resume_experiment_stuff.resume_expt_name']) 
+                         if config['experiment_params.resume_experiment'] == 'true' else gen_expt_dir())
         packaged = (prefix, expt_dir)
         save_config(expt_dir=expt_dir, config=config)
     else:
@@ -373,19 +372,18 @@ def main():
     at_init = config['experiment_params.training_type'] == 'at_init'
     prune_harness = pruning_utils.PruningStuff(model=model)
     densities = generate_densities(current_sparsity=prune_harness.model.get_overall_sparsity())
-    densities = densities[resume_level:] if resume_level is not None else densities
+    densities = densities[config['experiment_params.resume_experiment_stuff.resume_level']:] if config['experiment_params.resume_experiment'] == 'true' else densities
     
     # Pre-compute paths to avoid repeated string concatenation
     checkpoints_dir = os.path.join(packaged[1], "checkpoints")
     model_init_path = os.path.join(checkpoints_dir, "model_init.pt")
     
     for level, density in enumerate(densities):
-        if rank == 0:
+        if rank == 0 :
             if at_init:
                 console.print(f"[bold cyan]Pruning Model at initialization[/bold cyan]")
             elif level == 0:
                 console.print(f'[bold cyan]Dense training homie![/bold cyan]')
-                continue
             else:
                 console.print(f"[bold cyan]Pruning Model at level: {level} to a target density of {density:.4f}[/bold cyan]")
                 model_level_path = os.path.join(checkpoints_dir, f"model_level_{level-1}.pt")
