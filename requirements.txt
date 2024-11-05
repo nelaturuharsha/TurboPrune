@@ -1,11 +1,9 @@
-prettytable
 pandas
 numpy
 pyyaml
 tqdm
 torch
 torchvision
-airbench
 schedulefree
 pyhessian
 wandb
