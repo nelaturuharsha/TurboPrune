@@ -4,7 +4,7 @@ model_params:
 dataset:
   dataset_name: ImageNet
   batch_size: 128 ## assumes 4 gpus
-  num_workers: 16
+  num_workers: 32
   data_root_dir: ./experiments
 prune_params:
   prune_rate: 0.2
@@ -12,7 +12,7 @@ prune_params:
   target_sparsity: 0.999
 experiment_params:
   seed: 0
-  base_dir: ./experiments 
+  base_dir: ./imagenet_experiments 
   training_type: lrr
   training_precision: bfloat16
   epochs_per_level: 90
@@ -21,13 +21,10 @@ optimizer:
   momentum: 0.9
   weight_decay: 1e-4
   scheduler_type: TriangularSchedule
-  lr_start: 0.2
-  lr_peak: 1
-  lr_end: 0.0
 cyclic_training:
   num_cycles: 1
   strategy: constant
 wandb_params:
-  project_name: placeholder
+  project_name: imagenet_lrr_baseline 
 dist_params:
   distributed: 'true'

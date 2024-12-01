@@ -125,10 +125,8 @@ def step_trapezoidal(it, lr, num_iterations, warmup_iters, warmdown_iters):
         return decay_ratio
 
 @param("experiment_params.epochs_per_level")
-@param('optimizer.triangular_scheduler_stuff.lr_start')
-@param('optimizer.triangular_scheduler_stuff.lr_peak')
-@param('optimizer.triangular_scheduler_stuff.lr_end')
-def TriangularSchedule(epochs_per_level, lr_start, lr_peak, lr_end, optimizer, steps_per_epoch):
+@param("optimizer.warmup_fraction")
+def TriangularSchedule(epochs_per_level, warmup_fraction, optimizer, steps_per_epoch):
     """Triangular learning rate schedule. Best performance with CIFAR10.
     credits: https://x.com/kellerjordan0/status/1776701859669172398
 
@@ -142,15 +140,8 @@ def TriangularSchedule(epochs_per_level, lr_start, lr_peak, lr_end, optimizer, s
         torch.optim.lr_scheduler.LambdaLR: Lambda learning rate scheduler.
     """
 
-    config = get_current_config()
-
-    assert lr_peak > lr_end
-    assert lr_peak > lr_start
-
     total_train_steps = epochs_per_level * steps_per_epoch
-    
-    lr_schedule = np.interp(np.arange(1+total_train_steps), [0, int(lr_start * total_train_steps), total_train_steps], [lr_start, lr_peak, lr_end])
- 
+    lr_schedule = np.interp(np.arange(1+total_train_steps), [0, int(warmup_fraction * total_train_steps), total_train_steps], [0.2, 1, 0])
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_schedule.__getitem__)
     
     return scheduler

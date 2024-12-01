@@ -64,23 +64,11 @@ def get_current_params() -> None:
                 ),
             ),
             required=True,
-        ),    
+        ),   
+        warmup_fraction=Param(float, "fraction of epochs to warmup", default=0.2),
     )
     
-    Section('optimizer.triangular_scheduler_stuff', 'parameters for triangular schedule').enable_if(lambda cfg: cfg['optimizer.scheduler_type'] == 'TriangularSchedule').params(
-        lr_start=Param(float, default=0.2),
-        lr_peak=Param(float, default=1.0),
-        lr_end=Param(float, default=0.2)
-    )
 
-    Section('optimizer.trapezoidal_scheduler_stuff', 'parameters for trapezoidal schedule').enable_if(lambda cfg: cfg['optimizer.scheduler_type'] == 'TrapezoidalSchedule').params(
-        warmup_steps=Param(int, default=5),
-        cooldown_steps=Param(int, default=5),
-        lr_start=Param(float, default=0.2),
-        lr_peak=Param(float, default=1.0),
-        lr_end=Param(float, default=0.2)
-    )
-    
     Section("dist_params", "distributed parameters").params(
         distributed=Param(And(str, OneOf(['true', 'false'])), "use distributed training", default='false'))
 

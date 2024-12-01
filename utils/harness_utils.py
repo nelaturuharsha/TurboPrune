@@ -61,18 +61,16 @@ def gen_expt_dir(base_dir: str) -> Tuple[str, str]:
     config = get_current_config()
     
     # Create prefix using f-string with config values
-    prefix = (
-        f"{config['dataset.dataset_name']}"
-        f"_{config['model_params.model_name']}"
-        f"_{config['experiment_params.training_type']}"
-        f"_{config['prune_params.prune_method']}"
-        f"_{config['prune_params.target_sparsity']}"
-        f"_seed_{config['experiment_params.seed']}"
-        f"_budget_{config['experiment_params.epochs_per_level']}"
-        f"_cycles_{config['cyclic_training.num_cycles']}"
-        f"_strat_{config['cyclic_training.strategy']}"
-        f"_lr_{config['optimizer.triangular_scheduler_stuff.lr_start']}-{config['optimizer.triangular_scheduler_stuff.lr_peak']}-{config['optimizer.triangular_scheduler_stuff.lr_end']}" if config['optimizer.scheduler_type'] == 'TriangularSchedule' else ""
-    )
+    prefix = f"{config['dataset.dataset_name']}" \
+        f"_{config['model_params.model_name']}" \
+        f"_{config['experiment_params.training_type']}" \
+        f"_{config['prune_params.prune_method']}" \
+        f"_{config['prune_params.target_sparsity']}" \
+        f"_seed_{config['experiment_params.seed']}" \
+        f"_budget_{config['experiment_params.epochs_per_level']}" \
+        f"_cycles_{config['cyclic_training.num_cycles']}" \
+        f"_strat_{config['cyclic_training.strategy']}" \
+        f"_lr_{config['optimizer.lr']}"
     
     current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
     unique_id = uuid.uuid4().hex[:6]
@@ -241,7 +239,6 @@ def save_metrics_and_update_summary(console, model, expt_dir, prefix, level, lev
     metrics_path = os.path.join(expt_dir, 'metrics', 'epochwise_metrics', f"level_{level}_metrics.csv")
     pd.DataFrame(level_metrics).to_csv(metrics_path, index=False)
     console.log(f"[bold cyan]Saved metrics for level {level}[/bold cyan]")
-
     summary_path = os.path.join(expt_dir, "metrics", f"{prefix}_overall_summary.csv")
     sparsity = model.get_overall_sparsity()
     new_data = {
@@ -311,6 +308,8 @@ def display_training_info(cycle_info, training_info, optimizer_info):
     console.print("\n") 
     console.print(experiment_config)
     console.print("\n") 
+
+
 
 def save_model(model, save_path, distributed: bool):
     if distributed and hasattr(model, '_orig_mod'):

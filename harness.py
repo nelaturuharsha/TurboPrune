@@ -2,11 +2,9 @@
 import os
 from typing import Tuple
 from argparse import ArgumentParser
-import tqdm
 
 ## rich stuff
 from rich.console import Console
-from rich.panel import Panel
 from rich.table import Table
 from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeRemainingColumn
 
@@ -29,10 +27,11 @@ import wandb
 
 ## file-based imports
 import utils.schedulers as schedulers
-import utils.pruning_utils as pruning_utils
+from utils.pruning_utils import *
 from utils.harness_utils import *
 from utils.dataset import AirbenchLoaders, imagenet
-from utils.distributed_utils import broadcast_model, check_model_equality, broadcast_object, setup_distributed
+from utils.distributed_utils import broadcast_object, setup_distributed
+from utils.custom_models import TorchVisionModel, CustomModel
 from utils.metric_utils import *
 
 torch.backends.cuda.matmul.allow_tf32 = True
@@ -51,39 +50,39 @@ class Harness:
     @param("dataset.dataset_name")
     @param("experiment_params.use_compile")
     @param("dist_params.distributed")
-    def __init__(self, dataset_name: str, use_compile: bool, distributed: bool, gpu_id: int, expt_dir: str, model: nn.Module) -> None:
+    def __init__(self, dataset_name: str, use_compile: bool, distributed: bool, gpu_id: int, expt_dir: str, model: nn.Module = None) -> None:
         self.config = get_current_config()
         self.dataset_name = dataset_name.lower()
         self.use_compile = True if use_compile == 'true' else False
         self.distributed = distributed and torch.cuda.device_count() > 1 and not self.dataset_name.startswith("cifar")
         self.num_classes = 1000 if self.dataset_name.startswith("imagenet") else 100 if self.dataset_name.startswith("cifar100") else 10
+        self.epoch_counter, self.console = 0, Console() 
         self.gpu_id = gpu_id
-
+    
         if self.dataset_name.startswith("cifar"):
             self.gpu_id = 0
         self.this_device = f"cuda:{self.gpu_id}"
         self.criterion = nn.CrossEntropyLoss()
 
-        if self.distributed:
-            self.train_accuracy = Accuracy(task="multiclass", num_classes=self.num_classes, dist_sync_on_step=True).to(self.this_device)
-            self.test_accuracy = Accuracy(task="multiclass", num_classes=self.num_classes, dist_sync_on_step=True).to(self.this_device)
-        else:
-            self.train_accuracy = Accuracy(task="multiclass", num_classes=self.num_classes).to(self.this_device)
-            self.test_accuracy = Accuracy(task="multiclass", num_classes=self.num_classes).to(self.this_device)
+        dist_sync = {"dist_sync_on_step": True} if self.distributed else {}
+        self.train_accuracy = Accuracy(task="multiclass", num_classes=self.num_classes, **dist_sync).to(self.this_device)
+        self.test_accuracy = Accuracy(task="multiclass", num_classes=self.num_classes, **dist_sync).to(self.this_device)
 
         self.loaders = AirbenchLoaders() if self.dataset_name.startswith("cifar") else imagenet(this_device=self.this_device, distributed=self.distributed)
         
         self.train_loader = self.loaders.train_loader
         self.test_loader = self.loaders.test_loader
-
-        self.model = model.to(self.this_device)
+        if model is None:
+            self.model = self.acquire_model()
+        else:
+            self.model = model
         self.model = torch.compile(self.model, mode='reduce-overhead') if self.use_compile else self.model
         self.model = DDP(self.model, device_ids=[self.gpu_id]) if self.distributed else self.model
 
 
         self.prefix, self.expt_dir = expt_dir
         self.precision, self.use_amp = self.get_dtype_amp()
-        self.epoch_counter, self.console = 0, Console()
+        
         if self.gpu_id == 0:
             self.training_info = {'dataset' : self.dataset_name, 'use_compile' : self.use_compile, 'distributed' : self.distributed,
                             'precision' : self.precision, 'use_amp' : self.use_amp, 'expt_dir' : self.expt_dir}
@@ -104,58 +103,78 @@ class Harness:
             "epoch": self.epoch_counter,
             "cycle": cycle
         })
+
+    def acquire_model(self) -> nn.Module:
+        """Acquire the model based on the provided parameters.
+        Returns:
+            nn.Module: The acquired model.
+        """
+        try:
+            model = TorchVisionModel()
+            if self.gpu_id == 0:
+                self.console.print("[bold turquoise]Using Torchvision Model :)[/bold turquoise]")
+        except:
+            model = CustomModel()
+            if self.gpu_id == 0:
+                self.console.print("[bold turquoise]Using Custom Model :D[/bold turquoise]")
+        model = model.to(self.this_device)
+        return model
     
     @param("optimizer.lr")
     @param("optimizer.momentum")
-    @param("optimizer.weight_decay")
+    @param("optimizer.weight_decay") 
     @param("optimizer.scheduler_type")
-    def create_optimizers(
-        self, lr: float, momentum: float, weight_decay: float, scheduler_type: str, epochs_per_level: int) -> None:
-        """Instantiate the optimizer and learning rate scheduler.
-
-        Args:
-            lr (float): Initial learning rate.
-            momentum (float): Momentum for SGD.
-            weight_decay (float): Weight decay for optimizer.
-            scheduler_type (str): Type of scheduler.
-        """
-
-        if scheduler_type =='ScheduleFree':
+    def create_optimizers(self, lr: float, momentum: float, weight_decay: float, scheduler_type: str, epochs_per_level: int) -> None:
+        """Create optimizer and learning rate scheduler."""
+        
+        # Create base optimizer
+        if scheduler_type == 'ScheduleFree':
             self.optimizer = schedulefree.SGDScheduleFree(
                 self.model.parameters(),
                 warmup_steps=self.config['optimizer.warmup_steps'],
-                lr=lr,
-                momentum=momentum,
-                weight_decay=weight_decay,
+                lr=lr, momentum=momentum, weight_decay=weight_decay
             )
             self.scheduler = None
-        
         else:
-            self.optimizer = optim.SGD(self.model.parameters(), lr=lr, momentum=momentum, weight_decay=weight_decay)
-            if scheduler_type != 'OneCycleLR':
-                scheduler = getattr(schedulers, scheduler_type)            
+            self.optimizer = optim.SGD(
+                self.model.parameters(), 
+                lr=lr, momentum=momentum, weight_decay=weight_decay
+            )
+            
+            # Create scheduler
+            if scheduler_type == 'OneCycleLR':
+                self.scheduler = optim.lr_scheduler.OneCycleLR(
+                    self.optimizer,
+                    max_lr=lr,
+                    epochs=epochs_per_level,
+                    steps_per_epoch=len(self.train_loader)
+                )
+            else:
+                scheduler_cls = getattr(schedulers, scheduler_type)
+                scheduler_args = {
+                    'optimizer': self.optimizer,
+                    'steps_per_epoch': len(self.train_loader)
+                }
                 
                 if scheduler_type == 'TriangularSchedule':
-                    self.scheduler = scheduler(optimizer=self.optimizer, steps_per_epoch=len(self.train_loader), epochs_per_level=epochs_per_level)
+                    scheduler_args['epochs_per_level'] = epochs_per_level
                 elif scheduler_type == 'TrapezoidalSchedule':
-                    self.scheduler = scheduler(optimizer=self.optimizer, steps_per_epoch=len(self.train_loader),
-                                                warmup_steps=len(self.train_loader) * self.config['optimizer.trapezoidal_scheduler_stuff.warmup_steps'],
-                                                cooldown_steps=len(self.train_loader) * self.config['optimizer.trapezoidal_scheduler_stuff.cooldown_steps'])
-                elif scheduler_type == 'MultiStepLRWarmup':
-                    self.scheduler = scheduler(optimizer=self.optimizer)
-            else:
-                self.scheduler = optim.lr_scheduler.OneCycleLR(self.optimizer,
-                                                              max_lr=lr,
-                                                              epochs=epochs_per_level,
-                                                              steps_per_epoch=len(self.train_loader))
-        
+                    scheduler_args.update({
+                        'warmup_steps': len(self.train_loader) * self.config['optimizer.trapezoidal_scheduler_stuff.warmup_steps'],
+                        'cooldown_steps': len(self.train_loader) * self.config['optimizer.trapezoidal_scheduler_stuff.cooldown_steps']
+                    })
+                
+                self.scheduler = scheduler_cls(**scheduler_args)
 
+        # Log optimizer info on main process
         if self.gpu_id == 0:
             self.optimizer_info = {
-                "Type": type(self.optimizer).__name__, "Learning rate": lr,
-                "Momentum": momentum, "Weight decay": weight_decay,
-                "Scheduler": scheduler_type, "Epochs per level": epochs_per_level,
-                "Starting LR": lr
+                "type": type(self.optimizer).__name__,
+                "lr": lr,
+                "momentum": momentum, 
+                "weight_decay": weight_decay,
+                "scheduler": scheduler_type,
+                "epochs_per_level": epochs_per_level
             }
     def train_one_epoch(self, epoch: int) -> Tuple[float, float]:
         """Train the model for one epoch.
@@ -191,12 +210,7 @@ class Harness:
 
                 if self.scheduler is not None and self.config['optimizer.scheduler_type'] != 'MultiStepLRWarmup':
                     self.scheduler.step()
-                    '''if epoch == 0:
-                        schedule_path = './debug_lr_schedule.txt'
-                        with open(schedule_path, 'a') as f:
-                            f.write(f'Current step at LR: {self.scheduler.last_epoch}\n')
-                        print(f'Saved LR schedule debug info to {schedule_path}')
-                    '''
+                    
                 progress.update(task, advance=1)
                 
         if self.config["optimizer.scheduler_type"] == 'MultiStepLRWarmup':
@@ -233,7 +247,7 @@ class Harness:
 
         if self.distributed:
             test_loss_tensor = torch.tensor(test_loss).to(self.this_device)
-            dist.all_reduce(test_loss_tensor, op=dist.ReduceOp.SUM)
+            dist.all_reduce(test_loss_tensor, op=dist.ReduceOp.AVG)
             test_loss = test_loss_tensor.item()
             del test_loss_tensor
 
@@ -277,46 +291,41 @@ class Harness:
                 train_loss, train_acc = self.train_one_epoch(epoch)
                 test_loss, test_acc = self.test()
 
-                for key, value in zip(['cycle', 'epoch', 'train_loss', 'test_loss', 'train_acc', 'test_acc'],
-                                      [cycle, self.epoch_counter, train_loss, test_loss, train_acc, test_acc]):
+                for key, value in [('cycle', cycle),
+                                 ('epoch', self.epoch_counter),
+                                 ('train_loss', train_loss),
+                                 ('test_loss', test_loss),
+                                 ('train_acc', train_acc),
+                                 ('test_acc', test_acc)]:
                     level_metrics[key].append(value)
 
                 if self.gpu_id == 0:
                     self._log_metrics(cycle, train_loss, test_loss, train_acc, test_acc)
+                    
                     if not hasattr(self, 'metrics_table'):
                         self.metrics_table = Table(title=f"Training Metrics for Level {level}")
-                        self.metrics_table.add_column("Cycle", style="cyan")
-                        self.metrics_table.add_column("Epoch", style="magenta")
-                        self.metrics_table.add_column("Train Loss", style="green")
-                        self.metrics_table.add_column("Test Loss", style="red")
-                        self.metrics_table.add_column("Train Acc", style="green")
-                        self.metrics_table.add_column("Test Acc", style="red")
+                        for col, style in [("Cycle","cyan"), ("Epoch","magenta"), 
+                                         ("Train Loss","green"), ("Test Loss","red"),
+                                         ("Train Acc","green"), ("Test Acc","red")]:
+                            self.metrics_table.add_column(col, style=style)
                     
-                    self.metrics_table.add_row(
-                        str(cycle),
-                        str(epoch),
-                        f"{train_loss:.4f}",
-                        f"{test_loss:.4f}",
-                        f"{train_acc:.2f}%",
-                        f"{test_acc:.2f}%"
-                    )
+                    self.metrics_table.add_row(str(cycle), str(epoch), 
+                                             f"{train_loss:.4f}", f"{test_loss:.4f}",
+                                             f"{train_acc:.2f}%", f"{test_acc:.2f}%")
                     
                     self.console.rule(style="cyan")
-                    self.console.print("\n") 
-                    self.console.print(self.metrics_table)
-                    self.console.print("\n") 
+                    self.console.print("\n", self.metrics_table, "\n")
+                    
                     if level == 0 and epoch == 9:
-                        save_model(self.model, os.path.join(self.expt_dir, "checkpoints", "model_rewind.pt"), distributed=self.distributed)
-                        torch.save(self.optimizer.state_dict(), os.path.join(self.expt_dir, "artifacts", "optimizer_rewind.pt"))
+                        save_model(self.model, os.path.join(self.expt_dir, "checkpoints", "model_rewind.pt"), 
+                                 distributed=self.distributed)
+                        torch.save(self.optimizer.state_dict(), 
+                                 os.path.join(self.expt_dir, "artifacts", "optimizer_rewind.pt"))
             
             if self.gpu_id == 0:
-                save_metrics_and_update_summary(self.console, self.model, self.expt_dir, self.prefix, level, level_metrics, num_cycles, epoch_schedule)
+                save_metrics_and_update_summary(self.console, model, self.expt_dir, self.prefix, level, level_metrics, num_cycles, epoch_schedule)
                 save_model(self.model, os.path.join(self.expt_dir, "checkpoints", f"model_level_{level}_cycle_{cycle}.pt"), distributed=self.distributed)
                 self.console.print(f"[bold cyan]Saved checkpoint for level {level}, cycle {cycle}[/bold cyan]")
-        
-        if self.gpu_id == 0:
-            model = self.model.module if self.distributed else self.model
-            save_metrics_and_update_summary(self.console, model, self.expt_dir, self.prefix, level, level_metrics, num_cycles, epoch_schedule)
 
 def initialize_config(): 
     config = get_current_config()
@@ -359,19 +368,10 @@ def main():
         run_id = broadcast_object(run_id)
         packaged = broadcast_object(packaged)
 
-    prune_harness = pruning_utils.PruningStuff()
-    model = prune_harness.model
-    
-    if use_distributed:
-        state_dict = broadcast_object(model.state_dict() if rank == 0 else None)
-        model.load_state_dict(state_dict)
-        models_equal = check_model_equality(model)
-        if rank == 0:
-            console.print(f"[bold {'green' if models_equal else 'red'}]Models are {'equal' if models_equal else 'not equal'} across all GPUs[/bold {'green' if models_equal else 'red'}]")
-    
+    harness = Harness(gpu_id=rank, expt_dir=packaged)
+    model_in_question = harness.model.module if use_distributed else harness.model
     at_init = config['experiment_params.training_type'] == 'at_init'
-    prune_harness = pruning_utils.PruningStuff(model=model)
-    densities = generate_densities(current_sparsity=prune_harness.model.get_overall_sparsity())
+    densities = generate_densities(current_sparsity=model_in_question.get_overall_sparsity())
     densities = densities[config['experiment_params.resume_experiment_stuff.resume_level']:] if config['experiment_params.resume_experiment'] == 'true' else densities
     
     # Pre-compute paths to avoid repeated string concatenation
@@ -383,35 +383,24 @@ def main():
             if at_init:
                 console.print(f"[bold cyan]Pruning Model at initialization[/bold cyan]")
             elif level == 0:
+                save_model(model_in_question, model_init_path, distributed=use_distributed)
                 console.print(f'[bold cyan]Dense training homie![/bold cyan]')
             else:
                 console.print(f"[bold cyan]Pruning Model at level: {level} to a target density of {density:.4f}[/bold cyan]")
                 model_level_path = os.path.join(checkpoints_dir, f"model_level_{level-1}.pt")
-                prune_harness.model.load_model(model_level_path)
+                print(model_in_question)
+                model_in_question.load_model(model_level_path)
 
             if level != 0 or at_init:
-                prune_harness.prune_the_model(prune_method=config['prune_params.prune_method'], target_density=density)
-                sparsity = prune_harness.model.get_overall_sparsity()
-                panel = Panel(f"[bold green]Model sparsity after pruning: {sparsity:.4f}[/bold green]", 
-                            title="Sparsity", border_style="green", expand=False)
-                console.print(panel)
-                
+                prune_the_model(prune_method=config['prune_params.prune_method'], harness=harness, target_density=density)
                 if not at_init:
-                    prune_harness.model.reset_weights(training_type=config['experiment_params.training_type'], 
+                    model_in_question.reset_weights(training_type=config['experiment_params.training_type'], 
                                                     expt_dir=packaged[1])
-        
-        if use_distributed:
-            broadcast_model(prune_harness.model)
-            if rank == 0:
-                models_equal = check_model_equality(prune_harness.model)
-                console.print(f"[bold {'green' if models_equal else 'red'}]Models are {'equal' if models_equal else 'not equal'} across all GPUs[/bold {'green' if models_equal else 'red'}]")
 
-        harness = Harness(model=prune_harness.model, expt_dir=packaged, gpu_id=rank)
-
-        if level == 0 and rank == 0:
-            save_model(harness.model, model_init_path, distributed=use_distributed)
-
+        harness = Harness(model=model_in_question, expt_dir=packaged, gpu_id=rank)
+ 
         harness.train_one_level(level=level)
+        
         if rank == 0:
             model_level_path = os.path.join(checkpoints_dir, f"model_level_{level}.pt")
             save_model(harness.model, model_level_path, distributed=use_distributed)
