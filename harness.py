@@ -383,7 +383,7 @@ def main():
             if at_init:
                 console.print(f"[bold cyan]Pruning Model at initialization[/bold cyan]")
             elif level == 0:
-                save_model(model_in_question, model_init_path, distributed=use_distributed)
+                save_model(model_in_question, model_init_path, distributed=False)
                 console.print(f'[bold cyan]Dense training homie![/bold cyan]')
             else:
                 console.print(f"[bold cyan]Pruning Model at level: {level} to a target density of {density:.4f}[/bold cyan]")
@@ -396,7 +396,7 @@ def main():
                 if not at_init:
                     model_in_question.reset_weights(training_type=config['experiment_params.training_type'], 
                                                     expt_dir=packaged[1])
-
+        console.print('[bold magenta]Model Sparsity check:[/bold magenta]', f'[cyan]{model_in_question.get_overall_sparsity():.2f}%[/cyan]')
         harness = Harness(model=model_in_question, expt_dir=packaged, gpu_id=rank)
  
         harness.train_one_level(level=level)
