@@ -165,7 +165,6 @@ jobs/
 job-*
 checkpoints/
 .DS_Store
-experiment_*
 *.sh
 data/
 cifar10/

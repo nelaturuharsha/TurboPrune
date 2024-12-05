@@ -6,6 +6,7 @@ from fastargs import get_current_config
 
 get_current_config()
 
+
 class ConvMask(nn.Conv2d):
     """
     Conv2d layer which inherits from the original PyTorch Conv2d layer with an additionally initialized mask parameter.

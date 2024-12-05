@@ -1,0 +1,7 @@
+defaults:
+  - _self_
+  - optimizer_params: sgd_cifar10
+  - pruning_params: lrr 
+  - experiment_params: cifar10
+  - model_params: resnet18
+  - cyclic_training: cyclic_training_test

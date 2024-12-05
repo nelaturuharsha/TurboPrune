@@ -1,121 +1,72 @@
 import numpy as np
-from fastargs import get_current_config
-from fastargs.decorators import param
+from omegaconf import DictConfig
+from hydra.utils import instantiate
 import torch
 from torch.optim.optimizer import Optimizer
 
-get_current_config()
 
-def _warmup_lr(base_lr: float, warmup_length: int, epoch: int) -> float:
-    """Calculate the learning rate during warmup.
+def get_multistep_warmup_scheduler(cfg: DictConfig, optimizer: Optimizer):
+    """Creates a PyTorch SequentialLR scheduler combining warmup and multistep decay.
+    Default schedule assumes total training epochs of 150.
 
     Args:
-        base_lr (float): Base learning rate.
-        warmup_length (int): Number of warmup epochs.
-        epoch (int): Current epoch.
+        cfg (DictConfig): OmegaConf config containing optimizer parameters
+        optimizer (Optimizer): PyTorch optimizer
 
     Returns:
-        float: Adjusted learning rate for the current epoch.
+        torch.optim.lr_scheduler.SequentialLR: Sequential scheduler combining warmup and decay
     """
-    return base_lr * (epoch + 1) / warmup_length
+    warmup_steps = (
+        cfg.optimizer_params.warmup_fraction * cfg.experiment_params.epochs_per_level
+    )
+    warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
+        optimizer, start_factor=0.1, end_factor=1.0, total_iters=warmup_steps
+    )
+
+    main_scheduler = torch.optim.lr_scheduler.MultiStepLR(
+        optimizer, milestones=[60, 120], gamma=0.1
+    )
+
+    return torch.optim.lr_scheduler.SequentialLR(
+        optimizer,
+        schedulers=[warmup_scheduler, main_scheduler],
+        milestones=[warmup_steps],
+    )
 
 
-class LRScheduler:
-    """Base class for learning rate schedulers defined here.
-
-    Args:
-        optimizer (Optimizer): Wrapped optimizer.
-        last_epoch (int, optional): The index of last epoch. Default is -1.
-    """
-
-    def __init__(self, optimizer: Optimizer, last_epoch: int = -1) -> None:
-        self.optimizer = optimizer
-        self.last_epoch = last_epoch
-
-    def step(self) -> None:
-        """Update the learning rate."""
-        self.last_epoch += 1
-        new_lr = self.get_lr()
-        for param_group in self.optimizer.param_groups:
-            param_group["lr"] = new_lr
-
-    def get_lr(self) -> float:
-        """Compute the learning rate for the current epoch.
-
-        Returns:
-            float: Learning rate for the current epoch.
-        """
-        raise NotImplementedError
-
-
-class MultiStepLRWarmup(LRScheduler):
-    """Step learning rate scheduler with warmup, for CIFAR datasets.
-       Default schedule assumes total training epochs of 150.
-
-    Args:
-        lr (float): Initial learning rate.
-        warmup_steps (int): Number of warmup epochs.
-        optimizer (Optimizer): Wrapped optimizer.
-        last_epoch (int, optional): The index of last epoch. Default is -1.
-    """
-
-    @param("optimizer.lr")
-    @param("optimizer.warmup_steps")
-    def __init__(
-        self, lr: float, warmup_steps: int, optimizer: Optimizer, last_epoch: int = -1
-    ) -> None:
-        super().__init__(optimizer, last_epoch)
-        self.lr = lr
-        self.warmup_steps = warmup_steps
-
-    def get_lr(self) -> float:
-        """Compute the learning rate for the current epoch.
-
-        Returns:
-            float: Learning rate for the current epoch.
-        """
-        if self.last_epoch < self.warmup_steps:
-            return _warmup_lr(self.lr, self.warmup_steps, self.last_epoch)
-        else:
-            return self.lr * (0.1 ** ((self.last_epoch - self.warmup_steps) // 60))
-
-
-class ImageNetLRDropsWarmup(LRScheduler):
-    """Step learning rate scheduler with warmup for ImageNet.
+def ImageNetLRDropsWarmup(
+    cfg: DictConfig, optimizer: Optimizer
+) -> torch.optim.lr_scheduler.SequentialLR:
+    """Learning rate scheduler with warmup for ImageNet using SequentialLR.
+       Combines linear warmup with linear decay.
        Assumes that the total number of epochs is 90.
 
     Args:
-        lr (float): Initial learning rate.
-        optimizer (Optimizer): Wrapped optimizer.
-        last_epoch (int, optional): The index of last epoch. Default is -1.
+        cfg (DictConfig): OmegaConf config containing optimizer parameters
+        optimizer (Optimizer): PyTorch optimizer
+
+    Returns:
+        torch.optim.lr_scheduler.SequentialLR: Sequential scheduler combining warmup and decay
     """
 
-    @param("optimizer.lr")
-    def __init__(self, lr: float, optimizer: Optimizer, last_epoch: int = -1) -> None:
-        super().__init__(optimizer, last_epoch)
-        self.lr = lr
+    warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
+        optimizer, start_factor=0.1, end_factor=1.0, total_iters=10
+    )
 
-    def get_lr(self) -> float:
-        """Compute the learning rate for the current epoch.
+    main_scheduler = torch.optim.lr_scheduler.MultiStepLR(
+        optimizer, milestones=[40, 70], gamma=0.1
+    )
 
-        Returns:
-            float: Learning rate for the current epoch.
-        """
-        if self.last_epoch < 10:
-            return self.lr * 0.1
-        elif 10 <= self.last_epoch < 40:
-            return self.lr
-        elif 40 <= self.last_epoch < 70:
-            return 0.1 * self.lr
-        else:
-            return (0.1**2) * self.lr
+    return torch.optim.lr_scheduler.SequentialLR(
+        optimizer, schedulers=[warmup_scheduler, main_scheduler], milestones=[10]
+    )
 
 
 def step_trapezoidal(it, lr, num_iterations, warmup_iters, warmdown_iters):
     # 1) linear warmup for warmup_iters steps
     assert it <= num_iterations
     if it < warmup_iters:
-        return (it+1) / warmup_iters
+        return (it + 1) / warmup_iters
     # 2) constant lr for a while
     elif it < num_iterations - warmdown_iters:
         return 1
@@ -124,34 +75,66 @@ def step_trapezoidal(it, lr, num_iterations, warmup_iters, warmdown_iters):
         decay_ratio = (num_iterations - it) / warmdown_iters
         return decay_ratio
 
-@param("experiment_params.epochs_per_level")
-@param("optimizer.warmup_fraction")
-def TriangularSchedule(epochs_per_level, warmup_fraction, optimizer, steps_per_epoch):
+
+def TriangularSchedule(
+    cfg: DictConfig,
+    optimizer: Optimizer,
+    steps_per_epoch: int,
+    epochs_per_level: int = None,
+):
     """Triangular learning rate schedule. Best performance with CIFAR10.
     credits: https://x.com/kellerjordan0/status/1776701859669172398
 
     Args:
-        optimizer (Optimizer): Wrapped optimizer.
-        epochs_per_level (int): Number of epochs per level.
+        cfg (DictConfig): OmegaConf config containing optimizer parameters
+        optimizer (Optimizer): PyTorch optimizer
         steps_per_epoch (int): Number of steps per epoch.
         epochs_so_far (int): Number of epochs so far.
-        skip_warmup (bool): If True, skip the warmup phase and start at peak_lr.
     Returns:
         torch.optim.lr_scheduler.LambdaLR: Lambda learning rate scheduler.
     """
-
+    epochs_per_level = (
+        epochs_per_level
+        if epochs_per_level is not None
+        else cfg.experiment_params.epochs_per_level
+    )
     total_train_steps = epochs_per_level * steps_per_epoch
-    lr_schedule = np.interp(np.arange(1+total_train_steps), [0, int(warmup_fraction * total_train_steps), total_train_steps], [0.2, 1, 0])
+
+    lr_schedule = np.interp(
+        np.arange(1 + total_train_steps),
+        [
+            0,
+            int(cfg.optimizer_params.warmup_fraction * total_train_steps),
+            total_train_steps,
+        ],
+        [0.2, 1, 0],
+    )
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_schedule.__getitem__)
-    
+
     return scheduler
 
-@param("experiment_params.epochs_per_level")
-@param("optimizer.trapezoidal_scheduler_stuff.warmup_steps")
-@param("optimizer.trapezoidal_scheduler_stuff.cooldown_steps")
-@param("optimizer.lr")
-def TrapezoidalSchedule(epochs_per_level, warmup_steps, cooldown_steps, lr, optimizer, steps_per_epoch):
+
+def TrapezoidalSchedule(
+    cfg: DictConfig,
+    optimizer: Optimizer,
+    steps_per_epoch: int,
+    epochs_per_level: int = None,
+):
+    epochs_per_level = (
+        epochs_per_level
+        if epochs_per_level is not None
+        else cfg.experiment_params.epochs_per_level
+    )
     total_train_steps = epochs_per_level * steps_per_epoch
-    lr_schedule = [step_trapezoidal(it, lr, total_train_steps, warmup_iters=warmup_steps, warmdown_iters=cooldown_steps) for it in range(1+total_train_steps)]
+    lr_schedule = [
+        step_trapezoidal(
+            it,
+            cfg.optimizer_params.lr,
+            total_train_steps,
+            warmup_iters=cfg.optimizer_params.trapezoidal_scheduler_stuff.warmup_steps,
+            warmdown_iters=cfg.optimizer_params.trapezoidal_scheduler_stuff.cooldown_steps,
+        )
+        for it in range(1 + total_train_steps)
+    ]
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_schedule.__getitem__)
     return scheduler

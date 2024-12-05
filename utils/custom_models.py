@@ -1,24 +1,26 @@
 import os
-from typing import Type, List, Dict
+from typing import Type, Dict
+
+
+import torch
+import torch.nn as nn
+from torchvision import models
 
 from utils.mask_layers import *
 from utils.deit import *
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from torchvision import models
 
 from rich.console import Console
 from rich.table import Table
 
-from fastargs.decorators import param
+from omegaconf import DictConfig
+
 
 class PruneModel(nn.Module):
     def __init__(self):
         super().__init__()
         self.model = None
 
-    def prepare(self, dataset_name: str):
+    def prepare(self, cfg: DictConfig):
         raise NotImplementedError("Subclasses must implement prepare method")
 
     def forward(self, x):
@@ -58,9 +60,10 @@ class PruneModel(nn.Module):
                 total_zeros += zeros
 
         return (total_zeros / total_params) * 100 if total_params > 0 else 0
-    
 
-    def replace_layers(model: nn.Module, layer_types_map: Dict[Type[nn.Module], Type[nn.Module]]):
+    def replace_layers(
+        model: nn.Module, layer_types_map: Dict[Type[nn.Module], Type[nn.Module]]
+    ):
         """
         Replaces layers in the model based on the provided layer_types_map.
 
@@ -69,6 +72,7 @@ class PruneModel(nn.Module):
             layer_types_map: A dictionary where keys are the original layer types (e.g., nn.Linear) and values
                             are the replacement layer types (e.g., Conv1dMask).
         """
+
         def replace_layer(module: nn.Module):
             for name, child in module.named_children():
                 for old_type, new_type in layer_types_map.items():
@@ -77,7 +81,7 @@ class PruneModel(nn.Module):
                             new_layer = Conv1dMask(
                                 in_features=child.in_features,
                                 out_features=child.out_features,
-                                bias=child.bias is not None
+                                bias=child.bias is not None,
                             )
                         elif old_type == nn.Conv2d and issubclass(new_type, nn.Conv2d):
                             new_layer = new_type(
@@ -86,15 +90,15 @@ class PruneModel(nn.Module):
                                 kernel_size=child.kernel_size,
                                 stride=child.stride,
                                 padding=child.padding,
-                                bias=child.bias is not None
+                                bias=child.bias is not None,
                             )
                         else:
                             new_layer = new_type(
                                 in_features=child.in_features,
                                 out_features=child.out_features,
-                                bias=child.bias is not None
-                            )   
-                        
+                                bias=child.bias is not None,
+                            )
+
                         setattr(module, name, new_layer)
                         break
                 else:
@@ -105,32 +109,40 @@ class PruneModel(nn.Module):
     def load_model(self, load_path):
         self.model.load_state_dict(torch.load(load_path))
 
-    @param('experiment_params.training_type')
-    def reset_weights(self, training_type: str, expt_dir: str) -> None:
+    def reset_weights(self, cfg: DictConfig, expt_dir: str) -> None:
         """Reset (or don't) the weights to a given checkpoint based on the provided training type.
 
         Args:
-            training_type (str): Type of training ('imp', 'wr', or 'lrr').
-            expt_dir (str): Directory of the experiment.
+            config: Training configuration
+            expt_dir: Directory of the experiment.
         """
+        training_type = cfg.pruning_params.training_type
         if training_type == "imp":
-            print('Rewinding to init')
+            print("Rewinding to init")
             checkpoint_file = "model_init.pt"
         elif training_type == "wr":
-            print('Rewinding to warmup init (Epoch 10)')
+            print("Rewinding to warmup init (Epoch 10)")
             checkpoint_file = "model_rewind.pt"
         else:
-            print("Probably LRR, nothing to do -- or if PaI, we aren't touching it in any case.")
+            print(
+                "Probably LRR, nothing to do -- or if PaI, we aren't touching it in any case."
+            )
             return
 
-        original_dict = torch.load(os.path.join(expt_dir, "checkpoints", checkpoint_file))
+        original_dict = torch.load(
+            os.path.join(expt_dir, "checkpoints", checkpoint_file)
+        )
         current_state_dict = self.model.state_dict()
-        
+
         for name, param in original_dict.items():
-            if name in current_state_dict and current_state_dict[name].shape == param.shape and not name.endswith('mask'):
-                print(f'Restoring weights for {name}')
+            if (
+                name in current_state_dict
+                and current_state_dict[name].shape == param.shape
+                and not name.endswith("mask")
+            ):
+                print(f"Restoring weights for {name}")
                 current_state_dict[name].copy_(param)
-        
+
         self.model.load_state_dict(current_state_dict)
 
     def reset_masks(self):
@@ -141,47 +153,55 @@ class PruneModel(nn.Module):
     def load_only_masks(self, load_path: str):
         original_dict = torch.load(load_path)
         current_state_dict = self.model.state_dict()
-        
+
         for name, param in original_dict.items():
-            if name in current_state_dict and current_state_dict[name].shape == param.shape and name.endswith('mask'):
-                print(f'Restoring masks for {name}')
+            if (
+                name in current_state_dict
+                and current_state_dict[name].shape == param.shape
+                and name.endswith("mask")
+            ):
+                print(f"Restoring masks for {name}")
                 current_state_dict[name].copy_(param)
-        
+
         self.model.load_state_dict(current_state_dict)
 
-class TorchVisionModel(PruneModel):
-    @param('model_params.model_name')
-    @param('model_params.mask_layer_type')
-    def __init__(self, model_name: str,mask_layer_type: str):
-        super(TorchVisionModel, self).__init__()
-        self.model_name = model_name
-        self.mask_layer_type = mask_layer_type
-        self.prepare()
 
-    @param('dataset.dataset_name')
-    def prepare(self, dataset_name: str):
+class TorchVisionModel(PruneModel):
+    def __init__(self, cfg: DictConfig):
+        super(TorchVisionModel, self).__init__()
+        self.model_name = cfg.model_params.model_name
+        self.mask_layer_type = cfg.model_params.mask_layer_type
+        self.prepare(cfg)
+
+    def prepare(self, cfg: DictConfig):
         if hasattr(models, self.model_name):
             print(f"Using {self.model_name} from torchvision.models")
             self.model = getattr(models, self.model_name)(weights=None)
         else:
-            raise ValueError(f"Model {self.model_name} not found in torchvision.models.")
+            raise ValueError(
+                f"Model {self.model_name} not found in torchvision.models."
+            )
         self.model = self.model.to(memory_format=torch.channels_last)
-        if dataset_name.lower() in ['cifar10', 'cifar100']:
-            self._prepare_for_cifar(dataset_name.lower())
-        
+        dataset_name = cfg.experiment_params.dataset_name.lower()
+        if dataset_name in ["cifar10", "cifar100"]:
+            self._prepare_for_cifar(dataset_name)
+
         self._replace_layers()
         self.model = self.model.to(memory_format=torch.channels_last)
+
     def _prepare_for_cifar(self, dataset_name: str):
-        num_classes = 10 if dataset_name == 'cifar10' else 100
-        
-        if self.model_name.startswith('resnet'):
-            self.model.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
+        num_classes = 10 if dataset_name == "cifar10" else 100
+
+        if self.model_name.startswith("resnet"):
+            self.model.conv1 = nn.Conv2d(
+                3, 64, kernel_size=3, stride=1, padding=1, bias=False
+            )
             self.model.maxpool = nn.Identity()
             num_ftrs = self.model.fc.in_features
             self.model.fc = nn.Linear(num_ftrs, num_classes)
-        elif self.model_name.startswith('vgg'):
+        elif self.model_name.startswith("vgg"):
             self.model.features[0] = nn.Conv2d(3, 64, kernel_size=3, padding=1)
-            if hasattr(self.model, 'classifier'):
+            if hasattr(self.model, "classifier"):
                 if isinstance(self.model.classifier, nn.Sequential):
                     in_features = self.model.classifier[-1].in_features
                     self.model.classifier[-1] = nn.Linear(in_features, num_classes)
@@ -189,31 +209,28 @@ class TorchVisionModel(PruneModel):
                     in_features = self.model.classifier.in_features
                     self.model.classifier = nn.Linear(in_features, num_classes)
 
-
     def _replace_layers(self):
         conv_layer_of_type = globals().get(self.mask_layer_type)
-        layer_types_map = {
-            nn.Linear: Conv1dMask,
-            nn.Conv2d: conv_layer_of_type
-        }
+        layer_types_map = {nn.Linear: Conv1dMask, nn.Conv2d: conv_layer_of_type}
         self.replace_layers(layer_types_map)
 
+
 class CustomModel(PruneModel):
-    @param('model_params.model_name')
-    @param('model_params.mask_layer_type')
-    def __init__(self, model_name: str, mask_layer_type: str):
+    def __init__(self, cfg: DictConfig):
         super(CustomModel, self).__init__()
-        self.model_name = model_name
-        self.mask_layer_type =mask_layer_type
-        self.prepare()
+        self.model_name = cfg.model_params.model_name
+        self.mask_layer_type = cfg.model_params.mask_layer_type
+        self.prepare(cfg)
 
     def prepare(self):
         if self.model_name in globals():
             self.model = globals()[self.model_name]()
         else:
-            raise ValueError(f"Model {self.model_name} not found in torchvision.models or in the custom_models definition.")
+            raise ValueError(
+                f"Model {self.model_name} not found in torchvision.models or in the custom_models definition."
+            )
         self.model = self.model.to(memory_format=torch.channels_last)
-        
+
         self._replace_layers()
 
     def _replace_layers(self):
@@ -221,105 +238,3 @@ class CustomModel(PruneModel):
             nn.Linear: LinearMask,
         }
         self.replace_layers(layer_types_map)
-
-class PreActBlock(nn.Module):
-    """Pre-activation version of the BasicBlock used in a ResNet.
-    The flow goes x (input) -> BN -> ReLU -> Conv instead of x (input) -> Conv -> BN -> ReLU.
-
-    Args:
-        in_planes (int): Number of input channels.
-        planes (int): Number of output channels.
-        stride (int, optional): Stride size. Default is 1.
-    """
-
-    expansion: int = 1
-
-    def __init__(self, in_planes: int, planes: int, stride: int = 1) -> None:
-        super(PreActBlock, self).__init__()
-        self.bn1 = nn.BatchNorm2d(in_planes)
-        self.conv1 = nn.Conv2d(
-            in_planes, planes, kernel_size=3, stride=stride, padding=1, bias=False
-        )
-        self.bn2 = nn.BatchNorm2d(planes)
-        self.conv2 = nn.Conv2d(
-            planes, planes, kernel_size=3, stride=1, padding=1, bias=False
-        )
-        self.shortcut = nn.Sequential()
-        if stride != 1 or in_planes != self.expansion * planes:
-            self.shortcut = nn.Sequential(
-                nn.Conv2d(
-                    in_planes,
-                    self.expansion * planes,
-                    kernel_size=1,
-                    stride=stride,
-                    bias=False,
-                )
-            )
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Forward pass for the PreActBlock."""
-        out = F.relu(self.bn1(x))
-        shortcut = self.shortcut(out) if hasattr(self, "shortcut") else x
-        out = self.conv1(out)
-        out = self.conv2(F.relu(self.bn2(out)))
-        out += shortcut
-        return out
-
-
-class PreActResNet(nn.Module):
-    """Pre-activation ResNet model.
-
-    Args:
-        block (Type[PreActBlock]): Block type for the pre-activation ResNet.
-        num_blocks (List[int]): List containing the number of blocks per layer.
-        num_classes (int, optional): Number of output classes. Default is 10.
-    """
-
-    def __init__(
-        self, block: Type[PreActBlock], num_blocks: List[int], num_classes: int = 10
-    ) -> None:
-        super(PreActResNet, self).__init__()
-        self.in_planes = 64
-
-        self.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
-        self.layer1 = self._make_layer(block, 64, num_blocks[0], stride=1)
-        self.layer2 = self._make_layer(block, 128, num_blocks[1], stride=2)
-        self.layer3 = self._make_layer(block, 256, num_blocks[2], stride=2)
-        self.layer4 = self._make_layer(block, 512, num_blocks[3], stride=2)
-        self.fc = nn.Linear(512, num_classes)
-
-    def _make_layer(
-        self, block: Type[PreActBlock], planes: int, num_blocks: int, stride: int
-    ) -> nn.Sequential:
-        """Create a layer for the PreActResNet.
-
-        Args:
-            block (Type[PreActBlock]): Block type for the layer.
-            planes (int): Number of planes.
-            num_blocks (int): Number of blocks.
-            stride (int): Stride size.
-
-        Returns:
-            Residual block with the desired configuration.
-        """
-        strides = [stride] + [1] * (num_blocks - 1)
-        layers = []
-        for stride in strides:
-            layers.append(block(self.in_planes, planes, stride))
-            self.in_planes = planes * block.expansion
-        return nn.Sequential(*layers)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Forward pass for the PreActResNet."""
-        out = self.conv1(x)
-        out = self.layer1(out)
-        out = self.layer2(out)
-        out = self.layer3(out)
-        out = self.layer4(out)
-        out = F.avg_pool2d(out, 4)
-        out = out.view(out.size(0), -1)
-        out = self.fc(out)
-        return out
-
-
-

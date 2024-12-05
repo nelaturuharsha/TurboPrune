@@ -10,11 +10,11 @@ from torch.amp import autocast
 import torch.distributed as dist
 
 ## file-based imports
-from utils.harness_params import get_current_params
 from utils.mask_layers import ConvMask, Conv1dMask, LinearMask
-## fastargs
-from fastargs import get_current_config
-from fastargs.decorators import param
+
+## hydra + omegaconf
+from omegaconf import DictConfig
+from hydra.utils import instantiate
 from typing import Optional, Dict, Any
 
 from rich.console import Console
@@ -22,48 +22,43 @@ from rich.columns import Columns
 from rich.panel import Panel
 
 
-get_current_params()
-
-
-@param("prune_params.prune_method")
-def prune_the_model(prune_method: str, harness, target_density: float) -> None:
-    """Prune the model using the specified method and density.
-
-    Args:
-        prune_method (str): Method of pruning.
-        target_density (float): Desired density after pruning.
-    """
-    if harness.distributed:
-        model = harness.model.module
-    else:
-        model = harness.model
+def prune_the_model(cfg: DictConfig, harness, target_density: float) -> None:
+    """Prune model using specified method and density."""
+    model = harness.model.module if harness.distributed else harness.model
     console = harness.console
-
-    if prune_method not in {"synflow", "snip"}:
-        train_loader = None
-    else:
-        train_loader = harness.loaders.train_loader
+    prune_method = cfg.pruning_params.prune_method
+    train_loader = harness.train_loader if prune_method in {"synflow", "snip"} else None
 
     init_sparsity = model.get_overall_sparsity()
+    pruner_method = globals().get(f"prune_{prune_method}")
 
-    prune_method_name = f"prune_{prune_method}"
-    pruner_method = globals().get(prune_method_name)
-    
-    if pruner_method is None:
-        console.print(f"[bold red]Error: Unknown pruning method '{prune_method}'[/bold red]")
+    if not pruner_method:
+        console.print(
+            f"[bold red]Error: Unknown pruning method '{prune_method}'[/bold red]"
+        )
         return
 
-    if prune_method in {"synflow", "snip"}:
-        model = pruner_method(model, train_loader, target_density)
-    else:
-        model = pruner_method(model, target_density)
-
+    model = (
+        pruner_method(cfg, model, train_loader, target_density)
+        if train_loader
+        else pruner_method(model, target_density)
+    )
     final_sparsity = model.get_overall_sparsity()
 
-    initial = Panel(f"[magenta]{init_sparsity:.4f}[/magenta]", title="Initial Sparsity")
-    final = Panel(f"[cyan]{final_sparsity:.4f}[/cyan]", title="Final Sparsity")
-    console.print(Columns([initial, final]))
-    console.print(f"[bold green]Pruning completed using {prune_method} method![/bold green]")
+    console.print(
+        Columns(
+            [
+                Panel(
+                    f"[magenta]{init_sparsity:.4f}[/magenta]", title="Initial Sparsity"
+                ),
+                Panel(f"[cyan]{final_sparsity:.4f}[/cyan]", title="Final Sparsity"),
+            ]
+        )
+    )
+    console.print(
+        f"[bold green]Pruning completed using {prune_method} method![/bold green]"
+    )
+
 
 def prune_mag(model: nn.Module, density: float) -> nn.Module:
     """Magnitude-based pruning of the model.
@@ -152,19 +147,25 @@ def prune_random_erk(model: nn.Module, density: float) -> nn.Module:
 
     return model
 
-@param('experiment_params.training_precision')
-def get_dtype_amp(training_precision):
-    dtype_map = {
-        'bfloat16': (torch.bfloat16, True),
-        'float16': (torch.float16, True),
-        'float32': (torch.float32, False)
-    }
-    return dtype_map.get(training_precision, (torch.float32, False))
 
-def prune_snip(model: nn.Module, trainloader: Any, density: float) -> nn.Module:
+def get_dtype_amp(cfg: DictConfig):
+    dtype_map = {
+        "bfloat16": (torch.bfloat16, True),
+        "float16": (torch.float16, True),
+        "float32": (torch.float32, False),
+    }
+    return dtype_map.get(
+        cfg.experiment_params.training_precision, (torch.float32, False)
+    )
+
+
+def prune_snip(
+    cfg: DictConfig, model: nn.Module, trainloader: Any, density: float
+) -> nn.Module:
     """SNIP method for pruning of the model.
 
     Args:
+        cfg (DictConfig): Hydra config object
         model (nn.Module): The model to prune.
         trainloader (Any): The training data loader.
         density (float): Desired density after pruning.
@@ -173,12 +174,12 @@ def prune_snip(model: nn.Module, trainloader: Any, density: float) -> nn.Module:
         nn.Module: The pruned model.
     """
 
-    precision, use_amp = get_dtype_amp()
+    precision, use_amp = get_dtype_amp(cfg)
     criterion = nn.CrossEntropyLoss()
     for i, (images, target) in enumerate(trainloader):
         images = images.to(torch.device("cuda"))
         target = target.to(torch.device("cuda")).long()
-        with autocast('cuda', dtype=precision, enabled = use_amp):
+        with autocast("cuda", dtype=precision, enabled=use_amp):
             model.zero_grad()
             output = model(images)
             criterion(output, target).backward()
@@ -205,10 +206,14 @@ def prune_snip(model: nn.Module, trainloader: Any, density: float) -> nn.Module:
 
     return model
 
-def prune_synflow(model: nn.Module, trainloader: Any, density: float) -> nn.Module:
+
+def prune_synflow(
+    cfg: DictConfig, model: nn.Module, trainloader: Any, density: float
+) -> nn.Module:
     """SynFlow method pruning of the model.
 
     Args:
+        cfg (DictConfig): Hydra config object
         model (nn.Module): The model to prune.
         trainloader (Any): The training data loader.
         density (float): Desired density after pruning.
@@ -244,7 +249,7 @@ def prune_synflow(model: nn.Module, trainloader: Any, density: float) -> nn.Modu
         for n, param in model.state_dict().items():
             param.mul_(signs[n])
 
-    precision, use_amp = get_dtype_amp()
+    precision, use_amp = get_dtype_amp(cfg)
     signs = linearize(model)
 
     for i, (images, target) in enumerate(trainloader):
@@ -252,7 +257,7 @@ def prune_synflow(model: nn.Module, trainloader: Any, density: float) -> nn.Modu
         target = target.to(torch.device("cuda")).long()
         input_dim = list(images[0, :].shape)
         input = torch.ones([1] + input_dim).to("cuda")
-        with autocast('cuda', dtype=precision, enabled = use_amp):
+        with autocast("cuda", dtype=precision, enabled=use_amp):
             output = model(input)
             torch.sum(output).backward()
         break
@@ -280,6 +285,7 @@ def prune_synflow(model: nn.Module, trainloader: Any, density: float) -> nn.Modu
                 m.mask = torch.where(score <= threshold, zero, one)
 
     return model
+
 
 def prune_random_balanced(model: nn.Module, density: float) -> nn.Module:
     """Random balanced pruning of the model.
@@ -405,4 +411,3 @@ def prune_er_balanced(model: nn.Module, er_sparse_init: float) -> None:
         if isinstance(m, (ConvMask, Conv1dMask, LinearMask)):
             m.set_er_mask(sparsity_list[l])
             l += 1
-
