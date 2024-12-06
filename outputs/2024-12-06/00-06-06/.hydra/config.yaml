@@ -1,0 +1,32 @@
+optimizer_params:
+  optimizer_name: SGD
+  lr: 0.1
+  momentum: 0.9
+  weight_decay: 0.0005
+  scheduler_type: TriangularSchedule
+  warmup_fraction: 0.2
+pruning_params:
+  prune_rate: 0.2
+  prune_method: mag
+  target_sparsity: 0.999
+  training_type: lrr
+experiment_params:
+  dataset_name: ImageNet
+  data_root_dir: ./data
+  seed: 0
+  base_dir: ./experiments
+  batch_size: 128
+  num_workers: 16
+  epochs_per_level: 2
+  training_precision: bfloat16
+  distributed: true
+  resume_experiment: false
+  resume_experiment_stuff: null
+  wandb_project_name: TurboPrune_runs
+model_params:
+  model_name: resnet18
+  mask_layer_type: ConvMask
+  use_compile: false
+cyclic_training:
+  num_cycles: 1
+  strategy: constant
