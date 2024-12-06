@@ -1,5 +1,5 @@
 ## Pythonic imports
-from typing import Tuple, Dict, Optional
+from typing import Tuple, Dict, Optional, List
 
 ## Rich logging stuff
 from rich.console import Console
@@ -68,6 +68,15 @@ class BaseHarness:
 
         self.train_loader, self.val_loader = self._setup_dataloaders()
         self.precision, self.use_amp = self._get_dtype_amp()
+
+        self.training_info = {
+            "dataset": self.dataset_name,
+            "use_compile": self.use_compile,
+            "distributed": self.distributed,
+            "precision": self.precision,
+            "use_amp": self.use_amp,
+            "expt_dir": self.expt_dir,
+        }
 
     def _setup_model(self, model):
         """Setup model and move to device."""
@@ -148,9 +157,6 @@ class BaseHarness:
         total_loss = 0.0
         num_batches = len(self.train_loader)
 
-        if self.dataset_name.startswith("imagenet"):
-            self.train_loader.schedule()
-
         if not self.distributed or dist.get_rank() == 0:
             progress_ctx = Progress(
                 SpinnerColumn(),
@@ -172,8 +178,18 @@ class BaseHarness:
                 step_outputs = self.train_step(batch)
                 total_loss += step_outputs["loss"]
 
+                if (
+                    self.scheduler is not None
+                    and self.cfg.optimizer_params.scheduler_type
+                    in ["OneCycleLR", "TriangularSchedule", "TrapezoidalSchedule"]
+                ):
+                    self.scheduler.step()
+
                 if not self.distributed or dist.get_rank() == 0:
                     progress.advance(task)
+        
+        if self.cfg.optimizer_params.scheduler_type == "MultiStepLRWarmup":
+            self.scheduler.step()
 
         avg_loss = total_loss / num_batches
         accuracy = self.train_accuracy.compute()
@@ -231,54 +247,32 @@ class BaseHarness:
 
         return {"test_loss": avg_loss, "test_acc": accuracy.item() * 100}
 
-    def train(self, epochs: int):
-        """Main training loop."""
-        for epoch in range(epochs):
-            self.epoch_counter += 1
-
-            if not self.distributed or dist.get_rank() == 0:
-                self.console.rule(f"[bold blue]Epoch {self.epoch_counter}/{epochs}")
-
-            train_metrics = self.train_epoch()
-            test_metrics = self.test()
-
-            if (
-                self.scheduler is not None
-                and self.cfg.optimizer_params.scheduler_type != "MultiStepLRWarmup"
-            ):
-                self.scheduler.step()
-
-        if self.cfg.optimizer_params.scheduler_type == "MultiStepLRWarmup":
-            self.scheduler.step()
-
-        if not self.distributed or dist.get_rank() == 0:
-            self._log_metrics({**train_metrics, **test_metrics})
-
-        return {**train_metrics, **test_metrics}
-
     def _log_metrics(self, metrics: Dict[str, float]):
         """Log metrics using rich table."""
-        table = Table(show_header=True, header_style="bold magenta")
+        if not hasattr(self, '_metrics_table'):
+            self._metrics_table = Table(show_header=True, header_style="bold magenta", title="Optimization Metrics")
+            metrics_order = ["cycle", "epoch", "train_loss", "train_acc", "test_loss", "test_acc"]
+            for metric in metrics_order:
+                self._metrics_table.add_column(metric.replace("_", " ").title())
 
-        metrics_order = ["train_loss", "train_acc", "test_loss", "test_acc"]
+        metrics_order = ["cycle", "epoch", "train_loss", "train_acc", "test_loss", "test_acc"]
         colors = {
+            "cycle": "magenta",
+            "epoch": "blue",
             "train_loss": "red",
-            "train_acc": "green",
+            "train_acc": "green", 
             "test_loss": "yellow",
             "test_acc": "cyan",
         }
-
-        for metric in metrics_order:
-            table.add_column(metric.replace("_", " ").title())
 
         row = [
             f"[{colors[metric]}]{metrics[metric]:.4f}[/{colors[metric]}]"
             for metric in metrics_order
             if metric in metrics
         ]
-        table.add_row(*row)
+        self._metrics_table.add_row(*row)
 
-        self.console.print(table)
+        self.console.print(self._metrics_table)
 
 
 class PruningHarness(BaseHarness):
@@ -307,198 +301,6 @@ class PruningHarness(BaseHarness):
             and not self.dataset_name.startswith("cifar"),
         )
         self.precision, self.use_amp = self._get_dtype_amp()
-
-        if self.gpu_id == 0:
-            self._log_training_info()
-
-    def _setup_optimizer(self):
-        """Setup optimizer based on config."""
-        return optim.SGD(
-            self.model.parameters(),
-            lr=self.cfg.optimizer_params.lr,
-            momentum=self.cfg.optimizer_params.momentum,
-            weight_decay=self.cfg.optimizer_params.weight_decay,
-        )
-
-    def _log_training_info(self):
-        """Log training setup information."""
-        self.training_info = {
-            "dataset": self.dataset_name,
-            "use_compile": self.use_compile,
-            "distributed": self.distributed,
-            "precision": self.precision,
-            "use_amp": self.use_amp,
-            "expt_dir": self.expt_dir,
-        }
-        self.console.print(self.training_info)
-
-    def _get_num_classes(self) -> int:
-        if self.dataset_name.startswith("imagenet"):
-            return 1000
-        elif self.dataset_name.startswith("cifar100"):
-            return 100
-        return 10
-
-    def _create_model(self) -> nn.Module:
-        """Override base model creation with TorchVision/Custom model support."""
-        try:
-            model = TorchVisionModel(cfg=self.cfg)
-            model_type = "TorchVision"
-        except:
-            model = CustomModel(config=self.config)
-            model_type = "Custom"
-
-        if self.gpu_id == 0:
-            self.console.print(
-                f"[bold turquoise]Using {model_type} Model :D[/bold turquoise]"
-            )
-        if self.use_compile:
-            model = torch.compile(model, mode="reduce-overhead")
-        return model
-
-    def _setup_dataloaders(self):
-        """Override dataloader setup with dataset-specific loaders."""
-        if self.dataset_name.startswith("cifar"):
-            loaders = AirbenchLoaders(cfg=self.cfg)
-        elif self.dataset_name.startswith("imagenet"):
-            if self.cfg.experiment_params.get("use_webdataset", False):
-                loaders = WebDatasetImageNet(cfg=self.cfg, this_device=self.device)
-            else:
-                loaders = FFCVImagenet(cfg=self.cfg, this_device=self.device)
-        return loaders.train_loader, loaders.test_loader
-
-    def train_one_level(
-        self, num_cycles: int, epochs_per_level: int, level: int
-    ) -> None:
-        """Train for one level with cyclic training support."""
-        use_cyclic_training = num_cycles > 1
-        level_metrics = {
-            "cycle": [],
-            "epoch": [],
-            "train_loss": [],
-            "test_loss": [],
-            "train_acc": [],
-            "test_acc": [],
-        }
-
-        epoch_schedule = (
-            generate_cyclical_schedule(epochs_per_level=epochs_per_level)
-            if use_cyclic_training
-            else [epochs_per_level]
-        )
-
-        max_test_acc = 0.0
-        for cycle in range(num_cycles):
-            if self.gpu_id == 0:
-                model = self.model.module if self.distributed else self.model
-                self.cycle_info = {
-                    "Number of Cycles": num_cycles,
-                    "Epochs per Cycle": epoch_schedule,
-                    "Total Training Length": f"{sum(epoch_schedule)} epochs",
-                    "Training Cycle": f"{cycle + 1}/{num_cycles}",
-                    "Epochs this cycle": f"{epoch_schedule[cycle]}",
-                    "Total epochs so far": f"{sum(epoch_schedule[:cycle+1])}/{sum(epoch_schedule)}",
-                    "Current Sparsity": f"{model.get_overall_sparsity():.4f}",
-                }
-
-            self._setup_optimizer()
-            self._setup_scheduler(epochs_per_level=epoch_schedule[cycle])
-            if self.gpu_id == 0:
-                display_training_info(
-                    cycle_info=self.cycle_info,
-                    training_info=self.training_info,
-                    optimizer_info=self.optimizer_info,
-                )
-
-            if self.gpu_id == 0 and level == 0 and cycle == 0:
-                save_model(
-                    self.model,
-                    os.path.join(self.expt_dir, "checkpoints", "model_rewind.pt"),
-                    distributed=self.distributed,
-                )
-                torch.save(
-                    self.optimizer.state_dict(),
-                    os.path.join(self.expt_dir, "artifacts", "optimizer_rewind.pt"),
-                )
-
-            metrics = super().train(epoch_schedule[cycle])
-
-            if self.gpu_id == 0:
-                level_metrics["cycle"].append(cycle)
-                level_metrics["epoch"].append(self.epoch_counter)
-                level_metrics["train_loss"].append(metrics["train_loss"])
-                level_metrics["test_loss"].append(metrics["test_loss"])
-                level_metrics["train_acc"].append(metrics["train_acc"])
-                level_metrics["test_acc"].append(metrics["test_acc"])
-                max_test_acc = max(max_test_acc, metrics["test_acc"])
-
-                df = pd.DataFrame(level_metrics)
-                df.to_csv(
-                    os.path.join(
-                        self.expt_dir,
-                        "metrics",
-                        "level_wise_metrics",
-                        f"level_{level}_metrics.csv",
-                    ),
-                    index=False,
-                )
-
-        if self.gpu_id == 0:
-            model = self.model.module if self.distributed else self.model
-            summary_data = {
-                "Level": [level],
-                "Sparsity": [model.get_overall_sparsity()],
-                "Last_Test_Acc": [level_metrics["test_acc"][-1]],
-                "Max_Test_Acc": [max_test_acc],
-                "Schedule": [str(epoch_schedule)],
-            }
-            summary_df = pd.DataFrame(summary_data)
-
-            summary_path = os.path.join(self.expt_dir, f"{self.prefix}_summary.csv")
-
-            if os.path.exists(summary_path):
-                summary_df.to_csv(summary_path, mode="a", header=False, index=False)
-            else:
-                summary_df.to_csv(summary_path, index=False)
-
-    def _setup_cycle_info(
-        self, cycle: int, num_cycles: int, epoch_schedule: List[int], level: int
-    ):
-        """Setup cycle information for logging."""
-        model = self.model.module if self.distributed else self.model
-        self.cycle_info = {
-            "Number of Cycles": num_cycles,
-            "Epochs per Cycle": epoch_schedule,
-            "Total Training Length": f"{sum(epoch_schedule)} epochs",
-            "Training Cycle": f"{cycle + 1}/{num_cycles}",
-            "Epochs this cycle": f"{epoch_schedule[cycle]}",
-            "Total epochs so far": f"{sum(epoch_schedule[:cycle+1])}/{sum(epoch_schedule)}",
-            "Current Sparsity": f"{model.get_overall_sparsity():.4f}",
-        }
-        display_training_info(
-            cycle_info=self.cycle_info,
-            training_info=self.training_info,
-            optimizer_info=self.optimizer_info,
-        )
-
-    def _log_metrics(self, metrics: Dict[str, float]):
-        """Override metric logging with wandb support."""
-        if self.gpu_id == 0:
-            wandb.log({**metrics, "epoch": self.epoch_counter})
-            super()._log_metrics(metrics)
-
-    def _save_checkpoints(self, cycle: int, epoch: int, level: int):
-        """Save model and optimizer checkpoints."""
-        if level == 0 and epoch == 9:
-            save_model(
-                self.model,
-                os.path.join(self.expt_dir, "checkpoints", "model_rewind.pt"),
-                distributed=self.distributed,
-            )
-            torch.save(
-                self.optimizer.state_dict(),
-                os.path.join(self.expt_dir, "artifacts", "optimizer_rewind.pt"),
-            )
 
     def _setup_optimizer(self) -> None:
         """Create optimizer based on config."""
@@ -536,7 +338,7 @@ class PruningHarness(BaseHarness):
     def _setup_scheduler(self, epochs_per_level: int) -> None:
         """Create learning rate scheduler based on config."""
         scheduler_type = self.cfg.optimizer_params.scheduler_type
-
+        print(f"Setting up scheduler of type {scheduler_type}")
         if scheduler_type == "ScheduleFree":
             self.scheduler = None
         elif scheduler_type == "OneCycleLR":
@@ -567,3 +369,179 @@ class PruningHarness(BaseHarness):
                 )
 
             self.scheduler = scheduler_cls(**scheduler_args)
+
+
+    def _get_num_classes(self) -> int:
+        if self.dataset_name.startswith("imagenet"):
+            return 1000
+        elif self.dataset_name.startswith("cifar100"):
+            return 100
+        return 10
+
+    def _create_model(self) -> nn.Module:
+        """Override base model creation with TorchVision/Custom model support."""
+        try:
+            model = TorchVisionModel(cfg=self.cfg)
+            model_type = "TorchVision"
+        except:
+            model = CustomModel(config=self.config)
+            model_type = "Custom"
+
+        if self.gpu_id == 0:
+            self.console.print(
+                f"[bold turquoise]Using {model_type} Model :D[/bold turquoise]"
+            )
+        if self.use_compile:
+            model = torch.compile(model, mode="reduce-overhead")
+        return model
+
+    def _setup_dataloaders(self):
+        """Override dataloader setup with dataset-specific loaders."""
+        if self.dataset_name.lower().startswith("cifar"):
+            loaders = AirbenchLoaders(cfg=self.cfg)
+        elif self.dataset_name.lower().startswith("imagenet"):
+            imagenet_dataloader_type = self.cfg.experiment_params.imagenet_dataloader_type
+            if imagenet_dataloader_type == "webdataset":
+                loaders = WebDatasetImageNet(cfg=self.cfg, this_device=self.device)
+            elif imagenet_dataloader_type == "ffcv":
+                loaders = FFCVImagenet(cfg=self.cfg, this_device=self.device)
+            else:
+                raise ValueError(f"Invalid dataloader type: {imagenet_dataloader_type}")
+        return loaders.train_loader, loaders.test_loader
+
+    def train_one_level(
+        self, num_cycles: int, epochs_per_level: int, level: int
+    ) -> None:
+        """Train for one level with cyclic training support."""
+        use_cyclic_training = num_cycles > 1
+        level_metrics = {
+            "cycle": [],
+            "epoch": [],
+            "train_loss": [],
+            "test_loss": [],
+            "train_acc": [],
+            "test_acc": [],
+            "max_test_acc": [],
+            "sparsity": [],
+        }
+
+        epoch_schedule = (
+            generate_cyclical_schedule(epochs_per_level=epochs_per_level)
+            if use_cyclic_training
+            else [epochs_per_level]
+        )
+
+        for cycle in range(num_cycles):
+            if self.gpu_id == 0:
+                model = self.model.module if self.distributed else self.model
+                self.cycle_info = {
+                    "Number of Cycles": num_cycles,
+                    "Epochs per Cycle": epoch_schedule,
+                    "Total Training Length": f"{sum(epoch_schedule)} epochs",
+                    "Training Cycle": f"{cycle + 1}/{num_cycles}",
+                    "Epochs this cycle": f"{epoch_schedule[cycle]}",
+                    "Total epochs so far": f"{sum(epoch_schedule[:cycle+1])}/{sum(epoch_schedule)}",
+                    "Current Sparsity": f"{model.get_overall_sparsity():.4f}",
+                }
+
+            self._setup_optimizer()
+            self._setup_scheduler(epochs_per_level=epoch_schedule[cycle])
+            if self.gpu_id == 0:
+                display_training_info(
+                    cycle_info=self.cycle_info,
+                    training_info=self.training_info,
+                    optimizer_info=self.optimizer_info,
+                )
+
+            if self.gpu_id == 0 and level == 0 and cycle == 0:
+                save_model(
+                    self.model,
+                    os.path.join(self.expt_dir, "checkpoints", "model_rewind.pt"),
+                    distributed=self.distributed,
+                )
+                torch.save(
+                    self.optimizer.state_dict(),
+                    os.path.join(self.expt_dir, "artifacts", "optimizer_rewind.pt"),
+                )
+
+            for epoch in range(epoch_schedule[cycle]):
+                self.epoch_counter += 1
+
+                if not self.distributed or dist.get_rank() == 0:
+                    self.console.rule(f"[bold blue]Current Epoch: {epoch + 1}/{epoch_schedule[cycle]}, Global Epoch: {self.epoch_counter}/{sum(epoch_schedule)}")
+
+                train_metrics = self.train_epoch()
+                test_metrics = self.test()
+
+                metrics = {"cycle": int(cycle), "epoch": int(self.epoch_counter), **train_metrics, **test_metrics}
+                
+                if not self.distributed or dist.get_rank() == 0:
+                    self._log_metrics(metrics)
+
+                if self.gpu_id == 0:
+                    level_metrics["cycle"].append(cycle)
+                    level_metrics["epoch"].append(self.epoch_counter)
+                    level_metrics["train_loss"].append(metrics["train_loss"])
+                    level_metrics["test_loss"].append(metrics["test_loss"])
+                    level_metrics["train_acc"].append(metrics["train_acc"])
+                    level_metrics["test_acc"].append(metrics["test_acc"])
+                    level_metrics["max_test_acc"].append(max(level_metrics["test_acc"]))
+                    level_metrics["sparsity"].append(model.get_overall_sparsity())
+
+
+            if self.gpu_id == 0:
+                df = pd.DataFrame(level_metrics)
+                df.to_csv(
+                    os.path.join(
+                        self.expt_dir,
+                        "metrics",
+                        "level_wise_metrics",
+                        f"level_{level}_metrics.csv",
+                    ),
+                    index=False,
+                )
+
+        if self.gpu_id == 0:
+            model = self.model.module if self.distributed else self.model
+            summary_data = {
+                "Level": [level],
+                "Sparsity": [model.get_overall_sparsity()],
+                "Last_Test_Acc": [level_metrics["test_acc"][-1]],
+                "Max_Test_Acc": [max(level_metrics["test_acc"])],
+                "Schedule": [str(epoch_schedule)],
+            }
+            summary_df = pd.DataFrame(summary_data)
+
+            summary_path = os.path.join(self.expt_dir, f"{self.prefix}_summary.csv")
+            if os.path.exists(summary_path):
+                summary_df.to_csv(summary_path, mode="a", header=False, index=False)
+            else:
+                summary_df.to_csv(summary_path, index=False)
+
+    def _setup_cycle_info(
+        self, cycle: int, num_cycles: int, epoch_schedule: List[int], level: int
+    ):
+        """Setup cycle information for logging."""
+        model = self.model.module if self.distributed else self.model
+
+        self.cycle_info = {
+            "Number of Cycles": num_cycles,
+            "Epochs per Cycle": epoch_schedule,
+            "Total Training Length": f"{sum(epoch_schedule)} epochs",
+            "Training Cycle": f"{cycle + 1}/{num_cycles}",
+            "Epochs this cycle": f"{epoch_schedule[cycle]}",
+            "Total epochs so far": f"{sum(epoch_schedule[:cycle+1])}/{sum(epoch_schedule)}",
+            "Current Sparsity": f"{model.get_overall_sparsity():.4f}",
+        }
+
+        display_training_info(
+            cycle_info=self.cycle_info,
+            training_info=self.training_info,
+            optimizer_info=self.optimizer_info,
+        )
+
+    def _log_metrics(self, metrics: Dict[str, float]):
+        """Override metric logging with wandb support."""
+        if self.gpu_id == 0:
+            wandb.log({**metrics, "epoch": int(self.epoch_counter)})
+            super()._log_metrics(metrics)

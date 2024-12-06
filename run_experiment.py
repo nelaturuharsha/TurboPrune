@@ -17,12 +17,11 @@ torch.backends.cudnn.allow_tf32 = True
 
 # torch._dynamo.config.guard_nn_modules = True
 
-
 @hydra.main(version_base=None, config_path="conf", config_name="config")
 def main(cfg: DictConfig):
     """Main function for distributed training."""
     if cfg.experiment_params.dataset_name.lower().startswith("cifar"):
-        if dist.get_world_size() > 1:
+        if dist.is_initialized() and dist.get_world_size() > 1:
             if dist.get_rank() == 0:
                 console = Console()
                 console.print(
@@ -103,10 +102,11 @@ def main(cfg: DictConfig):
                     prune_the_model(cfg=cfg, harness=harness, target_density=density)
                     model_in_question.reset_weights(cfg=cfg, expt_dir=packaged[1])
 
-        console.print(
-            "[bold magenta]Model Sparsity check:[/bold magenta]",
-            f"[cyan]{model_in_question.get_overall_sparsity():.2f}%[/cyan]",
-        )
+        if rank == 0:
+            console.print(
+                "[bold magenta]Model Sparsity check:[/bold magenta]",
+                f"[cyan]{model_in_question.get_overall_sparsity():.2f}%[/cyan]",
+            )
 
         harness = PruningHarness(
             cfg=cfg, model=model_in_question, expt_dir=packaged, gpu_id=rank
@@ -129,6 +129,4 @@ def main(cfg: DictConfig):
 
 
 if __name__ == "__main__":
-    dist.init_process_group(backend="nccl")
-
     main()

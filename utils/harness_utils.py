@@ -100,15 +100,12 @@ def set_seed(cfg: DictConfig, is_deterministic: bool = False) -> None:
     random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
-    # When running on the CuDNN backend, two further options must be set
     if is_deterministic:
-        print("This ran")
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
         torch.use_deterministic_algorithms(True)
     # Set a fixed value for the hash seed
     os.environ["PYTHONHASHSEED"] = str(seed)
-    print(f"Random seed set as {seed}")
 
 
 def generate_densities(cfg: DictConfig, current_sparsity: float) -> list[float]:

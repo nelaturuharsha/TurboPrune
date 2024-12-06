@@ -99,6 +99,8 @@ def TriangularSchedule(
         else cfg.experiment_params.epochs_per_level
     )
     total_train_steps = epochs_per_level * steps_per_epoch
+    print(f"Epochs per level: {epochs_per_level}, steps per epoch: {steps_per_epoch}, total train steps: {total_train_steps}")
+
 
     lr_schedule = np.interp(
         np.arange(1 + total_train_steps),

@@ -175,7 +175,8 @@ class TorchVisionModel(PruneModel):
 
     def prepare(self, cfg: DictConfig):
         if hasattr(models, self.model_name):
-            print(f"Using {self.model_name} from torchvision.models")
+            if torch.distributed.is_initialized() and torch.distributed.get_rank() == 0 or not cfg.experiment_params.distributed:
+                print(f"Using {self.model_name} from torchvision.models")
             self.model = getattr(models, self.model_name)(weights=None)
         else:
             raise ValueError(

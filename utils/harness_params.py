@@ -50,7 +50,7 @@ class ExperimentConfig:
     resume_experiment: bool = False
     resume_experiment_stuff: Optional[ResumeExperimentConfig] = None
     wandb_project_name: str = "TurboPrune_runs"
-
+    imagenet_dataloader_type: Literal["ffcv", "webdataset"] = "ffcv"
 
 @dataclass
 class OptimizerConfig:
