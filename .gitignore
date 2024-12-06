@@ -185,3 +185,4 @@ sclpt_imagenet
 wandb_sweeps
 imagenet_experiments
 test.ipynb
+outputs/
