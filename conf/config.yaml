@@ -1,5 +1,6 @@
 defaults:
   - _self_
+  - dataset_params: imagenet_wds
   - optimizer_params: sgd_imagenet
   - pruning_params: lrr 
   - experiment_params: imagenet

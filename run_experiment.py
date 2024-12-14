@@ -17,6 +17,7 @@ torch.backends.cudnn.allow_tf32 = True
 
 # torch._dynamo.config.guard_nn_modules = True
 
+
 @hydra.main(version_base=None, config_path="conf", config_name="config")
 def main(cfg: DictConfig):
     """Main function for distributed training."""

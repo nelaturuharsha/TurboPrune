@@ -4,6 +4,16 @@ from omegaconf import MISSING
 
 
 @dataclass
+class DatasetConfig:
+    dataset_name: Literal["CIFAR10", "CIFAR100", "ImageNet"] = MISSING
+    data_root_dir: str = MISSING
+    batch_size: int = 512
+    num_workers: int = 16
+    gpu_workers: Optional[int] = 4
+    dataloader_type: Literal["torch", "ffcv", "webdataset"] = MISSING
+
+
+@dataclass
 class ModelConfig:
     model_name: str = MISSING
     mask_layer_type: Literal["ConvMask", "LinearMask"] = MISSING
@@ -35,14 +45,9 @@ class ResumeExperimentConfig:
 
 @dataclass
 class ExperimentConfig:
-    dataset_name: Literal["CIFAR10", "CIFAR100", "ImageNet"] = MISSING
-    data_root_dir: str = MISSING
-
     seed: int = 0
     base_dir: str = "./experiments"
 
-    batch_size: int = MISSING
-    num_workers: int = 16
     epochs_per_level: int = MISSING
     training_precision: Literal["bfloat16", "float32"] = "bfloat16"
 
@@ -51,6 +56,7 @@ class ExperimentConfig:
     resume_experiment_stuff: Optional[ResumeExperimentConfig] = None
     wandb_project_name: str = "TurboPrune_runs"
     imagenet_dataloader_type: Literal["ffcv", "webdataset"] = "ffcv"
+
 
 @dataclass
 class OptimizerConfig:
@@ -87,6 +93,7 @@ class CyclicTrainingConfig:
 @dataclass
 class MainConfig:
     defaults: list[str] = MISSING
+    dataset_params: DatasetConfig = MISSING
     model_params: ModelConfig = MISSING
     pruning_params: PruneConfig = MISSING
     experiment_params: ExperimentConfig = MISSING

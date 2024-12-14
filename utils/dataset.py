@@ -5,6 +5,7 @@ from filelock import FileLock  ## need this for large-scale sweeps on the same m
 
 # Third party imports
 import numpy as np
+import os
 
 ## PyTorch imports
 import torch
@@ -21,6 +22,8 @@ import torchvision.transforms as T
 from omegaconf import DictConfig
 from rich.console import Console
 from rich.panel import Panel
+
+import webdataset as wds
 
 IMAGENET_MEAN = np.array([0.485, 0.456, 0.406]) * 255
 IMAGENET_STD = np.array([0.229, 0.224, 0.225]) * 255
@@ -236,18 +239,18 @@ class AirbenchLoaders:
             )
         )
         self.train_loader = CifarLoader(
-            path=cfg.experiment_params.data_root_dir,
-            batch_size=cfg.experiment_params.batch_size,
+            path=cfg.dataset_params.data_root_dir,
+            batch_size=cfg.dataset_params.batch_size,
             train=True,
             aug={"flip": True, "translate": 2},
             altflip=True,
-            dataset=cfg.experiment_params.dataset_name,
+            dataset=cfg.dataset_params.dataset_name,
         )
         self.test_loader = CifarLoader(
-            path=cfg.experiment_params.data_root_dir,
-            batch_size=cfg.experiment_params.batch_size,
+            path=cfg.dataset_params.data_root_dir,
+            batch_size=cfg.dataset_params.batch_size,
             train=False,
-            dataset=cfg.experiment_params.dataset_name,
+            dataset=cfg.dataset_params.dataset_name,
         )
 
 
@@ -257,13 +260,11 @@ class StandardPyTorchCIFARLoader:
     def __init__(self, cfg: DictConfig) -> None:
         super(StandardPyTorchCIFARLoader, self).__init__()
 
-        self.dataset = cfg.experiment_params.dataset_name
+        self.dataset = cfg.dataset_params.dataset_name
         self.distributed = cfg.experiment_params.distributed
 
         if self.dataset == "CIFAR10":
-            self.data_root = os.path.join(
-                cfg.experiment_params.data_root_dir, "cifar10"
-            )
+            self.data_root = os.path.join(cfg.dataset_params.data_root_dir, "cifar10")
             self.transform_train = transforms.Compose(
                 [
                     transforms.RandomCrop(32, padding=4),
@@ -285,9 +286,7 @@ class StandardPyTorchCIFARLoader:
             self.dataset_class = datasets.CIFAR10
 
         elif self.dataset == "CIFAR100":
-            self.data_root = os.path.join(
-                cfg.experiment_params.data_root_dir, "cifar100"
-            )
+            self.data_root = os.path.join(cfg.dataset_params.data_root_dir, "cifar100")
             self.transform_train = transforms.Compose(
                 [
                     transforms.RandomCrop(32, padding=4),
@@ -327,17 +326,17 @@ class StandardPyTorchCIFARLoader:
 
         self.train_loader = torch.utils.data.DataLoader(
             trainset,
-            batch_size=cfg.experiment_params.batch_size,
+            batch_size=cfg.dataset_params.batch_size,
             shuffle=(self.train_sampler is None),
             sampler=self.train_sampler,
-            num_workers=cfg.experiment_params.num_workers,
+            num_workers=cfg.dataset_params.num_workers,
         )
 
         self.test_loader = torch.utils.data.DataLoader(
             testset,
-            batch_size=cfg.experiment_params.batch_size,
+            batch_size=cfg.dataset_params.batch_size,
             shuffle=False,
-            num_workers=cfg.experiment_params.num_workers,
+            num_workers=cfg.dataset_params.num_workers,
         )
 
 
@@ -403,11 +402,9 @@ class FFCVImagenet:
         ]
 
         self.train_loader = Loader(
-            os.path.join(
-                cfg.experiment_params.data_root_dir, "train_500_0.50_90.beton"
-            ),
-            batch_size=cfg.experiment_params.batch_size,
-            num_workers=cfg.experiment_params.num_workers,
+            os.path.join(cfg.dataset_params.data_root_dir, "train_500_0.50_90.beton"),
+            batch_size=cfg.dataset_params.batch_size,
+            num_workers=cfg.dataset_params.num_workers,
             order=OrderOption.RANDOM,
             os_cache=True,
             drop_last=True,
@@ -416,9 +413,9 @@ class FFCVImagenet:
         )
 
         self.test_loader = Loader(
-            os.path.join(cfg.experiment_params.data_root_dir, "val_500_0.50_90.beton"),
-            batch_size=cfg.experiment_params.batch_size,
-            num_workers=cfg.experiment_params.num_workers,
+            os.path.join(cfg.dataset_params.data_root_dir, "val_500_0.50_90.beton"),
+            batch_size=cfg.dataset_params.batch_size,
+            num_workers=cfg.dataset_params.num_workers,
             order=OrderOption.SEQUENTIAL,
             drop_last=False,
             pipelines={"image": val_image_pipeline, "label": label_pipeline},
@@ -427,106 +424,114 @@ class FFCVImagenet:
 
 
 class WebDatasetImageNet:
-    """ImageNet data loading using WebDataset"""
+    """Data loader for ImageNet using WebDataset format."""
 
-    def __init__(self, cfg: DictConfig, this_device):
-        try:
-            import webdataset as wds
-            from torchvision import transforms
+    def __init__(self, cfg: DictConfig) -> None:
+        super(WebDatasetImageNet, self).__init__()
 
-            console = Console()
-            if dist.get_rank() == 0:
-                panel = Panel(
-                    "[bold green]WebDataset loaded successfully for ImageNet![/bold green]",
-                    title="WebDataset Status",
-                    border_style="green",
-                    expand=False,
-                )
-                console.print(panel)
-        except ImportError:
-            raise ImportError(
-                "WebDataset is not installed. Please install it using: pip install webdataset"
+        self.cfg = cfg
+        self.normalize = transforms.Normalize(
+            mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
+        )
+
+        train_loader = self._make_loader(
+            urls=f"{cfg.dataset_params.data_root_dir}/imagenet1k-train-{{0000..1023}}.tar",
+            mode="train",
+            batch_size=cfg.dataset_params.batch_size,
+            num_workers=4,
+            resampled=True,
+        )
+
+        test_loader = self._make_loader(
+            urls=f"{cfg.dataset_params.data_root_dir}/imagenet1k-validation-{{00..63}}.tar",
+            mode="val",
+            batch_size=cfg.dataset_params.batch_size,
+            num_workers=cfg.dataset_params.gpu_workers,
+            resampled=False,
+        )
+
+        # Set number of batches for train/val
+        nbatches = max(
+            1,
+            1281167 // (cfg.dataset_params.batch_size * cfg.dataset_params.gpu_workers),
+        )
+        self.train_loader = train_loader.with_epoch(nbatches)
+        self.test_loader = test_loader.slice(
+            50000 // cfg.dataset_params.batch_size * cfg.dataset_params.gpu_workers
+        )
+
+    def _make_transform(self, mode="train"):
+        """Create transform pipeline."""
+        if mode == "train":
+            return transforms.Compose(
+                [
+                    transforms.RandomResizedCrop(224),
+                    transforms.RandomHorizontalFlip(),
+                    transforms.ToTensor(),
+                    self.normalize,
+                ]
+            )
+        elif mode == "val":
+            return transforms.Compose(
+                [
+                    transforms.Resize(256),
+                    transforms.CenterCrop(224),
+                    transforms.ToTensor(),
+                    self.normalize,
+                ]
             )
 
-        self.train_transform = transforms.Compose(
-            [
-                transforms.RandomResizedCrop(224),
-                transforms.RandomHorizontalFlip(),
-                transforms.ToTensor(),
-                transforms.Normalize(
-                    mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
-                ),
-            ]
-        )
+    def _nodesplitter(self, src, group=None):
+        """Split data across nodes for distributed training."""
+        if torch.distributed.is_initialized():
+            if group is None:
+                group = torch.distributed.group.WORLD
+            rank = torch.distributed.get_rank(group=group)
+            size = torch.distributed.get_world_size(group=group)
+            print(f"nodesplitter: rank={rank} size={size}")
+            count = 0
+            for i, item in enumerate(src):
+                if i % size == rank:
+                    yield item
+                    count += 1
+            print(f"nodesplitter: rank={rank} size={size} count={count} DONE")
+        else:
+            yield from src
 
-        self.val_transform = transforms.Compose(
-            [
-                transforms.Resize(256),
-                transforms.CenterCrop(224),
-                transforms.ToTensor(),
-                transforms.Normalize(
-                    mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
-                ),
-            ]
-        )
+    def _make_loader(
+        self,
+        urls,
+        mode="train",
+        batch_size=64,
+        num_workers=4,
+        cache_dir=None,
+        resampled=True,
+    ):
+        """Create WebDataset data loader."""
+        training = mode == "train"
+        transform = self._make_transform(mode=mode)
 
-        # Helper function to prepare samples
-        def preprocess_train(sample):
-            return {
-                "image": self.train_transform(sample["image"]),
-                "label": sample["label"],
-            }
-
-        def preprocess_val(sample):
-            return {
-                "image": self.val_transform(sample["image"]),
-                "label": sample["label"],
-            }
-
-        # Training dataloader
-        train_dataset = (
+        dataset = (
             wds.WebDataset(
-                os.path.join(
-                    cfg.experiment_params.data_root_dir, "train/{000000..000147}.tar"
-                )
+                urls,
+                repeat=training,
+                cache_dir=cache_dir,
+                shardshuffle=1000 if training else False,
+                resampled=resampled if training else False,
+                handler=wds.ignore_and_continue,
+                nodesplitter=None if (training and resampled) else self._nodesplitter,
             )
-            .shuffle(1000)
+            .shuffle(5000 if training else 0)
             .decode("pil")
-            .map(preprocess_train)
-            .to_tuple("image", "label")
+            .to_tuple("jpg;png;jpeg cls", handler=wds.ignore_and_continue)
+            .map_tuple(transform)
+            .batched(batch_size, partial=False)
         )
 
-        # Validation dataloader
-        val_dataset = (
-            wds.WebDataset(
-                os.path.join(
-                    cfg.experiment_params.data_root_dir, "val/{000000..000007}.tar"
-                )
-            )
-            .decode("pil")
-            .map(preprocess_val)
-            .to_tuple("image", "label")
+        loader = wds.WebLoader(
+            dataset, batch_size=None, shuffle=False, num_workers=num_workers
         )
+        loader.num_samples = 1281167 if training else 50000
+        loader.num_batches = loader.num_samples // (batch_size * num_workers)
 
-        # Set up distributed training if needed
-        num_workers = cfg.experiment_params.num_workers
-        world_size = (
-            torch.cuda.device_count() if cfg.experiment_params.distributed else 1
-        )
-        num_samples = 1281167 // world_size  # Total ImageNet training samples
-
-        self.train_loader = wds.WebLoader(
-            train_dataset,
-            batch_size=cfg.experiment_params.batch_size,
-            num_workers=num_workers,
-            shuffle=False,  # WebDataset handles shuffling internally
-        ).with_length(num_samples // cfg.experiment_params.batch_size)
-
-        self.test_loader = wds.WebLoader(
-            val_dataset,
-            batch_size=cfg.experiment_params.batch_size,
-            num_workers=num_workers,
-            shuffle=False,
-        ).with_length(
-            50000 // cfg.experiment_params.batch_size
-        )  # 50000 validation samples
+        return loader

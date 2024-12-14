@@ -175,20 +175,24 @@ class TorchVisionModel(PruneModel):
 
     def prepare(self, cfg: DictConfig):
         if hasattr(models, self.model_name):
-            if torch.distributed.is_initialized() and torch.distributed.get_rank() == 0 or not cfg.experiment_params.distributed:
+            if (
+                torch.distributed.is_initialized()
+                and torch.distributed.get_rank() == 0
+                or not cfg.experiment_params.distributed
+            ):
                 print(f"Using {self.model_name} from torchvision.models")
             self.model = getattr(models, self.model_name)(weights=None)
         else:
             raise ValueError(
                 f"Model {self.model_name} not found in torchvision.models."
             )
-        self.model = self.model.to(memory_format=torch.channels_last)
+        self.model = self.model  # .to(memory_format=torch.channels_last)
         dataset_name = cfg.experiment_params.dataset_name.lower()
         if dataset_name in ["cifar10", "cifar100"]:
             self._prepare_for_cifar(dataset_name)
 
         self._replace_layers()
-        self.model = self.model.to(memory_format=torch.channels_last)
+        self.model = self.model  # .to(memory_format=torch.channels_last)
 
     def _prepare_for_cifar(self, dataset_name: str):
         num_classes = 10 if dataset_name == "cifar10" else 100
@@ -230,7 +234,7 @@ class CustomModel(PruneModel):
             raise ValueError(
                 f"Model {self.model_name} not found in torchvision.models or in the custom_models definition."
             )
-        self.model = self.model.to(memory_format=torch.channels_last)
+        self.model = self.model  # .to(memory_format=torch.channels_last)
 
         self._replace_layers()
 

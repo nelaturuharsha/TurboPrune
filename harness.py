@@ -155,7 +155,7 @@ class BaseHarness:
         """Train for one epoch."""
         self.model.train()
         total_loss = 0.0
-        num_batches = len(self.train_loader)
+        num_batches = self.train_loader.num_batches
 
         if not self.distributed or dist.get_rank() == 0:
             progress_ctx = Progress(
@@ -187,7 +187,7 @@ class BaseHarness:
 
                 if not self.distributed or dist.get_rank() == 0:
                     progress.advance(task)
-        
+
         if self.cfg.optimizer_params.scheduler_type == "MultiStepLRWarmup":
             self.scheduler.step()
 
@@ -208,7 +208,7 @@ class BaseHarness:
         """Test model."""
         self.model.eval()
         total_loss = 0.0
-        num_batches = len(self.val_loader)
+        num_batches = self.val_loader.num_batches
 
         if not self.distributed or dist.get_rank() == 0:
             progress_ctx = Progress(
@@ -249,18 +249,36 @@ class BaseHarness:
 
     def _log_metrics(self, metrics: Dict[str, float]):
         """Log metrics using rich table."""
-        if not hasattr(self, '_metrics_table'):
-            self._metrics_table = Table(show_header=True, header_style="bold magenta", title="Optimization Metrics")
-            metrics_order = ["cycle", "epoch", "train_loss", "train_acc", "test_loss", "test_acc"]
+        if not hasattr(self, "_metrics_table"):
+            self._metrics_table = Table(
+                show_header=True,
+                header_style="bold magenta",
+                title="Optimization Metrics",
+            )
+            metrics_order = [
+                "cycle",
+                "epoch",
+                "train_loss",
+                "train_acc",
+                "test_loss",
+                "test_acc",
+            ]
             for metric in metrics_order:
                 self._metrics_table.add_column(metric.replace("_", " ").title())
 
-        metrics_order = ["cycle", "epoch", "train_loss", "train_acc", "test_loss", "test_acc"]
+        metrics_order = [
+            "cycle",
+            "epoch",
+            "train_loss",
+            "train_acc",
+            "test_loss",
+            "test_acc",
+        ]
         colors = {
             "cycle": "magenta",
             "epoch": "blue",
             "train_loss": "red",
-            "train_acc": "green", 
+            "train_acc": "green",
             "test_loss": "yellow",
             "test_acc": "cyan",
         }
@@ -272,7 +290,23 @@ class BaseHarness:
         ]
         self._metrics_table.add_row(*row)
 
+        # Create a standard pretty table
+        from prettytable import PrettyTable
+
+        summary_table = PrettyTable()
+        summary_table.field_names = ["Metric", "Value"]
+        summary_table.align["Metric"] = "l"  # Left align metric names
+        summary_table.align["Value"] = "r"  # Right align values
+
+        for metric, value in metrics.items():
+            if isinstance(value, (int, float)):
+                summary_table.add_row(
+                    [metric.replace("_", " ").title(), f"{value:.4f}"]
+                )
+
         self.console.print(self._metrics_table)
+        print("\nCurrent Status:")
+        print(summary_table)
 
 
 class PruningHarness(BaseHarness):
@@ -286,7 +320,7 @@ class PruningHarness(BaseHarness):
         model: Optional[nn.Module] = None,
     ):
         self.gpu_id = gpu_id
-        self.dataset_name = cfg.experiment_params.dataset_name.lower()
+        self.dataset_name = cfg.dataset_params.dataset_name.lower()
         self.use_compile = cfg.model_params.use_compile
         self.num_classes = self._get_num_classes()
         self.this_device = f"cuda:{self.gpu_id}"
@@ -346,14 +380,14 @@ class PruningHarness(BaseHarness):
                 self.optimizer,
                 max_lr=self.cfg.optimizer_params.lr,
                 epochs=epochs_per_level,
-                steps_per_epoch=len(self.train_loader),
+                steps_per_epoch=self.train_loader.num_batches,
             )
         else:
             scheduler_cls = getattr(schedulers, scheduler_type)
             scheduler_args = {
                 "cfg": self.cfg,
                 "optimizer": self.optimizer,
-                "steps_per_epoch": len(self.train_loader),
+                "steps_per_epoch": self.train_loader.num_batches,
             }
 
             if scheduler_type == "TriangularSchedule":
@@ -369,7 +403,6 @@ class PruningHarness(BaseHarness):
                 )
 
             self.scheduler = scheduler_cls(**scheduler_args)
-
 
     def _get_num_classes(self) -> int:
         if self.dataset_name.startswith("imagenet"):
@@ -400,9 +433,9 @@ class PruningHarness(BaseHarness):
         if self.dataset_name.lower().startswith("cifar"):
             loaders = AirbenchLoaders(cfg=self.cfg)
         elif self.dataset_name.lower().startswith("imagenet"):
-            imagenet_dataloader_type = self.cfg.experiment_params.imagenet_dataloader_type
+            imagenet_dataloader_type = self.cfg.dataset_params.dataloader_type
             if imagenet_dataloader_type == "webdataset":
-                loaders = WebDatasetImageNet(cfg=self.cfg, this_device=self.device)
+                loaders = WebDatasetImageNet(cfg=self.cfg)
             elif imagenet_dataloader_type == "ffcv":
                 loaders = FFCVImagenet(cfg=self.cfg, this_device=self.device)
             else:
@@ -468,13 +501,20 @@ class PruningHarness(BaseHarness):
                 self.epoch_counter += 1
 
                 if not self.distributed or dist.get_rank() == 0:
-                    self.console.rule(f"[bold blue]Current Epoch: {epoch + 1}/{epoch_schedule[cycle]}, Global Epoch: {self.epoch_counter}/{sum(epoch_schedule)}")
+                    self.console.rule(
+                        f"[bold blue]Current Epoch: {epoch + 1}/{epoch_schedule[cycle]}, Global Epoch: {self.epoch_counter}/{sum(epoch_schedule)}"
+                    )
 
                 train_metrics = self.train_epoch()
                 test_metrics = self.test()
 
-                metrics = {"cycle": int(cycle), "epoch": int(self.epoch_counter), **train_metrics, **test_metrics}
-                
+                metrics = {
+                    "cycle": int(cycle),
+                    "epoch": int(self.epoch_counter),
+                    **train_metrics,
+                    **test_metrics,
+                }
+
                 if not self.distributed or dist.get_rank() == 0:
                     self._log_metrics(metrics)
 
@@ -487,7 +527,6 @@ class PruningHarness(BaseHarness):
                     level_metrics["test_acc"].append(metrics["test_acc"])
                     level_metrics["max_test_acc"].append(max(level_metrics["test_acc"]))
                     level_metrics["sparsity"].append(model.get_overall_sparsity())
-
 
             if self.gpu_id == 0:
                 df = pd.DataFrame(level_metrics)
