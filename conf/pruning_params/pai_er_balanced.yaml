@@ -1,0 +1,2 @@
+prune_method: er_balanced
+training_type: at_init 

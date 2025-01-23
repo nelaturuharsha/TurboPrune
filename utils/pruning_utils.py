@@ -14,10 +14,8 @@ from utils.mask_layers import ConvMask, Conv1dMask, LinearMask
 
 ## hydra + omegaconf
 from omegaconf import DictConfig
-from hydra.utils import instantiate
-from typing import Optional, Dict, Any
+from typing import Dict, Any
 
-from rich.console import Console
 from rich.columns import Columns
 from rich.panel import Panel
 
@@ -377,6 +375,8 @@ def prune_er_erk(model: nn.Module, er_sparse_init: float) -> None:
             m.set_er_mask(sparsity_list[l])
             l += 1
 
+    return model
+
 
 def prune_er_balanced(model: nn.Module, er_sparse_init: float) -> None:
     """ER-balanced pruning at initialization.
@@ -411,3 +411,5 @@ def prune_er_balanced(model: nn.Module, er_sparse_init: float) -> None:
         if isinstance(m, (ConvMask, Conv1dMask, LinearMask)):
             m.set_er_mask(sparsity_list[l])
             l += 1
+    
+    return model

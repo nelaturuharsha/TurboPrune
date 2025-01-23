@@ -238,9 +238,11 @@ class AirbenchLoaders:
                 expand=False,
             )
         )
+        ## get total device count
+        
         self.train_loader = CifarLoader(
             path=cfg.dataset_params.data_root_dir,
-            batch_size=cfg.dataset_params.batch_size,
+            batch_size=cfg.dataset_params.total_batch_size,
             train=True,
             aug={"flip": True, "translate": 2},
             altflip=True,
@@ -248,12 +250,12 @@ class AirbenchLoaders:
         )
         self.test_loader = CifarLoader(
             path=cfg.dataset_params.data_root_dir,
-            batch_size=cfg.dataset_params.batch_size,
+            batch_size=cfg.dataset_params.total_batch_size,
             train=False,
             dataset=cfg.dataset_params.dataset_name,
         )
 
-
+'''
 class StandardPyTorchCIFARLoader:
     """Data loader for CIFAR-10 and CIFAR-100 datasets."""
 
@@ -338,7 +340,7 @@ class StandardPyTorchCIFARLoader:
             shuffle=False,
             num_workers=cfg.dataset_params.num_workers,
         )
-
+'''
 
 class FFCVImagenet:
     """Uses FFCV. Please ensure that it is installed!"""
@@ -346,6 +348,7 @@ class FFCVImagenet:
     def __init__(self, cfg: DictConfig, this_device):
         self.this_device = this_device
         self.rank = dist.get_rank()
+        self.total_device_count = dist.get_world_size()
         try:
             from ffcv.loader import Loader, OrderOption
             from ffcv.transforms import (
@@ -403,26 +406,28 @@ class FFCVImagenet:
 
         self.train_loader = Loader(
             os.path.join(cfg.dataset_params.data_root_dir, "train_500_0.50_90.beton"),
-            batch_size=cfg.dataset_params.batch_size,
+            batch_size=cfg.dataset_params.total_batch_size // self.total_device_count,
             num_workers=cfg.dataset_params.num_workers,
             order=OrderOption.RANDOM,
             os_cache=True,
             drop_last=True,
             pipelines={"image": train_image_pipeline, "label": label_pipeline},
             distributed=cfg.experiment_params.distributed,
+            seed=cfg.experiment_params.seed
         )
 
         self.test_loader = Loader(
             os.path.join(cfg.dataset_params.data_root_dir, "val_500_0.50_90.beton"),
-            batch_size=cfg.dataset_params.batch_size,
+            batch_size=cfg.dataset_params.total_batch_size // self.total_device_count,
             num_workers=cfg.dataset_params.num_workers,
             order=OrderOption.SEQUENTIAL,
             drop_last=False,
             pipelines={"image": val_image_pipeline, "label": label_pipeline},
             distributed=cfg.experiment_params.distributed,
+            seed=cfg.experiment_params.seed
         )
 
-
+'''
 class WebDatasetImageNet:
     """Data loader for ImageNet using WebDataset format."""
 
@@ -535,3 +540,4 @@ class WebDatasetImageNet:
         loader.num_batches = loader.num_samples // (batch_size * num_workers)
 
         return loader
+'''

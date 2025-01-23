@@ -1,8 +1,0 @@
-defaults:
-  - _self_
-  - dataset_params: imagenet_wds
-  - optimizer_params: sgd_imagenet
-  - pruning_params: lrr 
-  - experiment_params: imagenet
-  - model_params: resnet18
-  - cyclic_training: cyclic_training_test

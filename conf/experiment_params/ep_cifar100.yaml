@@ -1,0 +1,14 @@
+dataset_name: CIFAR100 
+data_root_dir: ./data
+
+seed: 0
+base_dir: ./experiments
+
+epochs_per_level: 150
+
+training_precision: bfloat16
+distributed: false 
+resume_experiment: false
+resume_experiment_stuff: null
+wandb_project_name: 'TurboPrune_baselines'
+imagenet_dataloader_type: none

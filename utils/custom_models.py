@@ -187,7 +187,7 @@ class TorchVisionModel(PruneModel):
                 f"Model {self.model_name} not found in torchvision.models."
             )
         self.model = self.model  # .to(memory_format=torch.channels_last)
-        dataset_name = cfg.experiment_params.dataset_name.lower()
+        dataset_name = cfg.dataset_params.dataset_name.lower()
         if dataset_name in ["cifar10", "cifar100"]:
             self._prepare_for_cifar(dataset_name)
 

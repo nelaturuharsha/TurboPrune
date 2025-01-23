@@ -1,0 +1,4 @@
+prune_rate: 0.2
+prune_method: mag
+target_sparsity: 0.999
+training_type: wr

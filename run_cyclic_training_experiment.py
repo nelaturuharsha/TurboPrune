@@ -10,7 +10,7 @@ import sys
 from utils.pruning_utils import *
 from utils.harness_utils import *
 from utils.distributed_utils import broadcast_object, setup_distributed
-from harness_definitions.standard_pruning_harness import PruningHarness
+from harness_definitions.cyclic_harness import CyclicPruningHarness
 
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
@@ -20,7 +20,6 @@ torch.backends.cudnn.allow_tf32 = True
 @hydra.main(version_base=None, config_path="conf", config_name="config")
 def main(cfg: DictConfig):
     """Main function for distributed training."""
-    # Check if this is being run with torchrun/distributed launch
     if "LOCAL_RANK" in os.environ or "RANK" in os.environ:
         if cfg.dataset_params.dataset_name.lower().startswith("cifar"):
             if int(os.environ.get("LOCAL_RANK", os.environ.get("RANK", 0))) == 0:
@@ -35,9 +34,9 @@ def main(cfg: DictConfig):
                 )
             sys.exit(1)
     use_distributed = (
-        cfg.experiment_params.distributed 
+        cfg.experiment_params.distributed
+        and torch.cuda.device_count() > 1
         and not cfg.dataset_params.dataset_name.lower().startswith("cifar")
-        and ("LOCAL_RANK" in os.environ or "RANK" in os.environ)
     )
 
     set_seed(cfg)
@@ -70,7 +69,7 @@ def main(cfg: DictConfig):
         run_id = broadcast_object(run_id)
         packaged = broadcast_object(packaged)
 
-    harness = PruningHarness(cfg=cfg, gpu_id=rank, expt_dir=packaged)
+    harness = CyclicPruningHarness(cfg=cfg, gpu_id=rank, expt_dir=packaged)
     model_in_question = harness.model.module if use_distributed else harness.model
     at_init = cfg.pruning_params.training_type == "at_init"
     densities = generate_densities(
@@ -109,10 +108,11 @@ def main(cfg: DictConfig):
                 f"[cyan]{model_in_question.get_overall_sparsity():.2f}%[/cyan]",
             )
 
-        harness = PruningHarness(
+        harness = CyclicPruningHarness(
             cfg=cfg, model=model_in_question, expt_dir=packaged, gpu_id=rank
         )
         harness.train_one_level(
+            num_cycles=cfg.cyclic_training.num_cycles,
             epochs_per_level=cfg.experiment_params.epochs_per_level,
             level=level,
         )

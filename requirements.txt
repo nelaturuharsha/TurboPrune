@@ -10,3 +10,4 @@ wandb
 torchmetrics
 rich
 timm
+hydra-core

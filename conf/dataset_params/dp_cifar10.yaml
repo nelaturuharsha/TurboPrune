@@ -1,0 +1,5 @@
+dataset_name: CIFAR10
+data_root_dir: ./data
+total_batch_size: 512 
+num_workers: 16
+dataloader_type: torch

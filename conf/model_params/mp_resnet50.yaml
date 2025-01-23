@@ -1,0 +1,3 @@
+model_name: resnet50
+mask_layer_type: ConvMask
+use_compile: false

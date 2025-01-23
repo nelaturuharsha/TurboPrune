@@ -1,0 +1,2 @@
+prune_method: synflow
+training_type: at_init

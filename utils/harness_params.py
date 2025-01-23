@@ -7,7 +7,7 @@ from omegaconf import MISSING
 class DatasetConfig:
     dataset_name: Literal["CIFAR10", "CIFAR100", "ImageNet"] = MISSING
     data_root_dir: str = MISSING
-    batch_size: int = 512
+    total_batch_size: int = 512
     num_workers: int = 16
     gpu_workers: Optional[int] = 4
     dataloader_type: Literal["torch", "ffcv", "webdataset"] = MISSING
@@ -98,4 +98,4 @@ class MainConfig:
     pruning_params: PruneConfig = MISSING
     experiment_params: ExperimentConfig = MISSING
     optimizer_params: OptimizerConfig = MISSING
-    cyclic_training: CyclicTrainingConfig = MISSING
+    cyclic_training: CyclicTrainingConfig 

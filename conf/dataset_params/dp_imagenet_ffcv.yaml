@@ -2,5 +2,4 @@ dataset_name: ImageNet
 data_root_dir: /path/to/imagenet
 total_batch_size: 512
 num_workers: 16
-gpu_workers: 4
 dataloader_type: ffcv

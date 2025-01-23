@@ -57,22 +57,24 @@ def gen_expt_dir(cfg: DictConfig) -> Tuple[str, str]:
         Tuple[str, str]: Prefix and path to the experiment directory.
     """
     base_dir = cfg.experiment_params.base_dir
-
+    if cfg.pruning_params.training_type == "cyclic":
+        num_cycles = cfg.cyclic_training.num_cycles
+    else:
+        num_cycles = 1
     # Create prefix using f-string with config values
     prefix = (
-        f"{cfg.experiment_params.dataset_name}"
+        f"{cfg.dataset_params.dataset_name}"
         f"_model_{cfg.model_params.model_name}"
         f"_trainingtype_{cfg.pruning_params.training_type}"
         f"_prunemethod_{cfg.pruning_params.prune_method}"
         f"_target_{cfg.pruning_params.target_sparsity:.2f}"
         f"_seed_{cfg.experiment_params.seed}"
         f"_budget_{cfg.experiment_params.epochs_per_level}epochs"
-        f"_cycles_{cfg.cyclic_training.num_cycles}"
-        f"_strat_{cfg.cyclic_training.strategy}"
-        f"_lr_{cfg.optimizer_params.lr:.3f}"
-        f"_mom_{cfg.optimizer_params.momentum:.1f}"
-        f"_wd_{cfg.optimizer_params.weight_decay:.4f}"
-        f"_sched_{cfg.optimizer_params.scheduler_type}"
+        + (f"_cycles_{num_cycles}_strat_{cfg.cyclic_training.strategy}" if num_cycles > 1 else "")
+        + f"_lr_{cfg.optimizer_params.lr:.3f}"
+        + f"_mom_{cfg.optimizer_params.momentum:.1f}"
+        + f"_wd_{cfg.optimizer_params.weight_decay:.4f}"
+        + f"_sched_{cfg.optimizer_params.scheduler_type}"
     )
 
     current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -119,9 +121,9 @@ def generate_densities(cfg: DictConfig, current_sparsity: float) -> list[float]:
     """
     prune_method = cfg.pruning_params.prune_method
     target_sparsity = cfg.pruning_params.target_sparsity
-    prune_rate = cfg.pruning_params.prune_rate
 
     if prune_method in ["mag", "random_erk", "random_balanced"]:
+        prune_rate = cfg.pruning_params.prune_rate
         densities = []
         current_density = 1 - current_sparsity
         target_density = 1 - target_sparsity
@@ -239,40 +241,8 @@ def generate_cyclical_schedule(cfg: DictConfig):
     return epochs
 
 
-def save_metrics_and_update_summary(
-    console, model, expt_dir, prefix, level, level_metrics, num_cycles, epoch_schedule
-):
-    metrics_path = os.path.join(
-        expt_dir, "metrics", "epochwise_metrics", f"level_{level}_metrics.csv"
-    )
-    pd.DataFrame(level_metrics).to_csv(metrics_path, index=False)
-    console.log(f"[bold cyan]Saved metrics for level {level}[/bold cyan]")
-    summary_path = os.path.join(expt_dir, "metrics", f"{prefix}_overall_summary.csv")
-    sparsity = model.get_overall_sparsity()
-    new_data = {
-        "level": [level],
-        "sparsity": [round(sparsity, 4)],
-        "num_cycles": [num_cycles],
-        "max_test_acc": [round(max(level_metrics["test_acc"]), 4)],
-        "final_test_acc": [round(level_metrics["test_acc"][-1], 4)],
-        "epoch_schedule": ["-".join(map(str, epoch_schedule))],
-    }
-    df = pd.DataFrame(new_data)
-    if os.path.exists(summary_path):
-        df.to_csv(summary_path, mode="a", header=False, index=False)
-    else:
-        df.to_csv(summary_path, index=False)
-    console.log(f"[bold cyan]Updated overall summary for level {level}[/bold cyan]")
 
-    wandb.log(
-        {
-            "sparsity": new_data["sparsity"][0],
-            "max_test_acc": new_data["max_test_acc"][0],
-        }
-    )
-
-
-def display_training_info(cycle_info, training_info, optimizer_info):
+def display_training_info(config_info, optimizer_info, cycle_info=None, training_info=None):
     console = Console()
 
     def create_wrapped_tree(title, info_dict):
@@ -285,60 +255,67 @@ def display_training_info(cycle_info, training_info, optimizer_info):
             tree.add(Group(text))
         return tree
 
-    hardware_tree = create_wrapped_tree("Training Harness Configuration", training_info)
+    hardware_tree = create_wrapped_tree("Training Harness Configuration", config_info)
     hardware_panel = Panel(
-        hardware_tree, title="Training Configuration", border_style="cyan"
+        hardware_tree, title="Hardware Configuration", border_style="cyan"
     )
+    if training_info is not None:
+        training_tree = create_wrapped_tree("Experiment Configuration", training_info)
+        training_panel = Panel(
+            training_tree, title="Training Configuration", border_style="cyan"
+        )
 
     schedule_tree = Tree("Training Schedule")
-    schedule_tree.add(
-        Group(
-            Text.from_markup(
-                f"[bold cyan]Number of Cycles:[/bold cyan] [yellow]{cycle_info['Number of Cycles']}[/yellow]"
+    if cycle_info is not None:
+        schedule_tree.add(
+            Group(
+                Text.from_markup(
+                    f"[bold cyan]Number of Cycles:[/bold cyan] [yellow]{cycle_info['Number of Cycles']}[/yellow]"
+                )
             )
         )
-    )
-    epochs_text = Text.from_markup(f"[bold cyan]Epochs per Cycle:[/bold cyan] ")
-    epochs_text.append(
-        ", ".join(map(str, cycle_info["Epochs per Cycle"])), style="yellow"
-    )
-    schedule_tree.add(Group(epochs_text))
-    schedule_tree.add(
-        Group(
-            Text.from_markup(
-                f"[bold cyan]Total Training Length:[/bold cyan] [yellow]{cycle_info['Total Training Length']}[/yellow]"
+        epochs_text = Text.from_markup(f"[bold cyan]Epochs per Cycle:[/bold cyan] ")
+        epochs_text.append(
+            ", ".join(map(str, cycle_info["Epochs per Cycle"])), style="yellow"
+        )
+        schedule_tree.add(Group(epochs_text))
+
+        schedule_tree.add(
+            Group(
+                Text.from_markup(
+                    f"[bold cyan]Total Training Length:[/bold cyan] [yellow]{cycle_info['Total Training Length']}[/yellow]"
+                )
             )
         )
-    )
     schedule_panel = Panel(
         schedule_tree, title="Overall Training Schedule", border_style="cyan"
     )
-
-    cycle_tree = Tree(f"Training Cycle {cycle_info['Training Cycle']}")
-    cycle_tree.add(
-        Group(
-            Text.from_markup(
-                f"[bold cyan]Epochs this cycle:[/bold cyan] [yellow]{cycle_info['Epochs this cycle']}[/yellow]"
+    if cycle_info is not None:
+        cycle_tree = Tree(f"Training Cycle {cycle_info['Training Cycle']}")
+        cycle_tree.add(
+            Group(
+                Text.from_markup(
+                    f"[bold cyan]Epochs this cycle:[/bold cyan] [yellow]{cycle_info['Epochs this cycle']}[/yellow]"
+                )
             )
         )
-    )
-    cycle_tree.add(
-        Group(
-            Text.from_markup(
-                f"[bold cyan]Total epochs so far:[/bold cyan] [yellow]{cycle_info['Total epochs so far']}[/yellow]"
+        cycle_tree.add(
+            Group(
+                Text.from_markup(
+                    f"[bold cyan]Total epochs so far:[/bold cyan] [yellow]{cycle_info['Total epochs so far']}[/yellow]"
+                )
             )
         )
-    )
-    cycle_tree.add(
-        Group(
-            Text.from_markup(
-                f"[bold cyan]Current Sparsity:[/bold cyan] [yellow]{cycle_info['Current Sparsity']}[/yellow]"
+        cycle_tree.add(
+            Group(
+                Text.from_markup(
+                    f"[bold cyan]Current Sparsity:[/bold cyan] [yellow]{cycle_info['Current Sparsity']}[/yellow]"
+                )
             )
         )
-    )
-    cycle_panel = Panel(
-        cycle_tree, title="Current Cycle Information", border_style="cyan"
-    )
+        cycle_panel = Panel(
+            cycle_tree, title="Current Cycle Information", border_style="cyan"
+        )
 
     optimizer_tree = create_wrapped_tree("Optimizer Configuration", optimizer_info)
     optimizer_panel = Panel(
@@ -346,12 +323,19 @@ def display_training_info(cycle_info, training_info, optimizer_info):
     )
 
     experiment_config = Layout()
-    experiment_config.split(
-        Layout(hardware_panel, name="hardware", ratio=1),
-        Layout(schedule_panel, name="schedule", ratio=1),
-        Layout(cycle_panel, name="cycle", ratio=1),
-        Layout(optimizer_panel, name="optimizer", ratio=1),
-    )
+    if cycle_info is not None:
+        experiment_config.split(
+            Layout(hardware_panel, name="hardware", ratio=1),
+            Layout(schedule_panel, name="schedule", ratio=1),
+            Layout(cycle_panel, name="cycle", ratio=1),
+            Layout(optimizer_panel, name="optimizer", ratio=1),
+        )
+    else:
+       experiment_config.split(
+            Layout(hardware_panel, name="hardware", ratio=1),
+            Layout(training_panel, name="training", ratio=1),
+            Layout(optimizer_panel, name="optimizer", ratio=1),
+        ) 
     experiment_config.update(
         Panel(
             experiment_config,
@@ -359,6 +343,7 @@ def display_training_info(cycle_info, training_info, optimizer_info):
             border_style="bold magenta",
         )
     )
+    console.print(experiment_config)
 
 
 def save_model(model, save_path, distributed: bool):
