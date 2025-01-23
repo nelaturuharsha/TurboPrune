@@ -98,4 +98,4 @@ class MainConfig:
     pruning_params: PruneConfig = MISSING
     experiment_params: ExperimentConfig = MISSING
     optimizer_params: OptimizerConfig = MISSING
-    cyclic_training: CyclicTrainingConfig 
+    cyclic_training: CyclicTrainingConfig

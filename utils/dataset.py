@@ -239,7 +239,7 @@ class AirbenchLoaders:
             )
         )
         ## get total device count
-        
+
         self.train_loader = CifarLoader(
             path=cfg.dataset_params.data_root_dir,
             batch_size=cfg.dataset_params.total_batch_size,
@@ -254,6 +254,7 @@ class AirbenchLoaders:
             train=False,
             dataset=cfg.dataset_params.dataset_name,
         )
+
 
 '''
 class StandardPyTorchCIFARLoader:
@@ -342,6 +343,7 @@ class StandardPyTorchCIFARLoader:
         )
 '''
 
+
 class FFCVImagenet:
     """Uses FFCV. Please ensure that it is installed!"""
 
@@ -413,7 +415,7 @@ class FFCVImagenet:
             drop_last=True,
             pipelines={"image": train_image_pipeline, "label": label_pipeline},
             distributed=cfg.experiment_params.distributed,
-            seed=cfg.experiment_params.seed
+            seed=cfg.experiment_params.seed,
         )
 
         self.test_loader = Loader(
@@ -424,8 +426,9 @@ class FFCVImagenet:
             drop_last=False,
             pipelines={"image": val_image_pipeline, "label": label_pipeline},
             distributed=cfg.experiment_params.distributed,
-            seed=cfg.experiment_params.seed
+            seed=cfg.experiment_params.seed,
         )
+
 
 '''
 class WebDatasetImageNet:

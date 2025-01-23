@@ -411,5 +411,5 @@ def prune_er_balanced(model: nn.Module, er_sparse_init: float) -> None:
         if isinstance(m, (ConvMask, Conv1dMask, LinearMask)):
             m.set_er_mask(sparsity_list[l])
             l += 1
-    
+
     return model

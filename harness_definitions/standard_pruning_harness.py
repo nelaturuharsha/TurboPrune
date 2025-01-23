@@ -174,12 +174,13 @@ class PruningHarness(BaseHarness):
         self._setup_optimizer()
         self._setup_scheduler(epochs_per_level=epochs_per_level)
         if self.gpu_id == 0:
-            self.training_info = {'model_name': self.cfg.model_params.model_name,
-                                  'Training Epochs' : epochs_per_level,
-                                  'Level' : f"{level}",
-                                  'Current Sparsity': f"{model.get_overall_sparsity():.4f} ",
-                                  'Target Sparsity' : f"{self.cfg.pruning_params.target_sparsity * 100:.4f}%",
-                                  }
+            self.training_info = {
+                "model_name": self.cfg.model_params.model_name,
+                "Training Epochs": epochs_per_level,
+                "Level": f"{level}",
+                "Current Sparsity": f"{model.get_overall_sparsity():.4f} ",
+                "Target Sparsity": f"{self.cfg.pruning_params.target_sparsity * 100:.4f}%",
+            }
             display_training_info(
                 config_info=self.config_info,
                 optimizer_info=self.optimizer_info,

@@ -118,7 +118,9 @@ class BaseHarness:
         inputs, targets = inputs.to(self.device), targets.to(self.device)
 
         self.optimizer.zero_grad()
-        with autocast(device_type=self.device, dtype=self.precision, enabled=self.use_amp):
+        with autocast(
+            device_type=self.device, dtype=self.precision, enabled=self.use_amp
+        ):
             outputs = self.model(inputs)
             loss = self.criterion(outputs, targets)
 
@@ -136,7 +138,9 @@ class BaseHarness:
         inputs, targets = batch
         inputs, targets = inputs.to(self.device), targets.to(self.device)
 
-        with torch.no_grad(), autocast(device_type=self.device, dtype=self.precision, enabled=self.use_amp):
+        with torch.no_grad(), autocast(
+            device_type=self.device, dtype=self.precision, enabled=self.use_amp
+        ):
             outputs = self.model(inputs)
             loss = self.criterion(outputs, targets)
 

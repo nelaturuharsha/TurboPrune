@@ -17,6 +17,7 @@ torch.backends.cudnn.allow_tf32 = True
 
 # torch._dynamo.config.guard_nn_modules = True
 
+
 @hydra.main(version_base=None, config_path="conf", config_name="config")
 def main(cfg: DictConfig):
     """Main function for distributed training."""
@@ -26,7 +27,7 @@ def main(cfg: DictConfig):
                 console = Console()
                 console.print(
                     Panel(
-                        "[bold red]CIFAR datasets do not support distributed training.[/bold red]\n" 
+                        "[bold red]CIFAR datasets do not support distributed training.[/bold red]\n"
                         "[bold red]Please run without torchrun/distributed launch.[/bold red]",
                         border_style="red",
                         expand=False,

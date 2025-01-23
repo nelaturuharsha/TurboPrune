@@ -70,7 +70,11 @@ def gen_expt_dir(cfg: DictConfig) -> Tuple[str, str]:
         f"_target_{cfg.pruning_params.target_sparsity:.2f}"
         f"_seed_{cfg.experiment_params.seed}"
         f"_budget_{cfg.experiment_params.epochs_per_level}epochs"
-        + (f"_cycles_{num_cycles}_strat_{cfg.cyclic_training.strategy}" if num_cycles > 1 else "")
+        + (
+            f"_cycles_{num_cycles}_strat_{cfg.cyclic_training.strategy}"
+            if num_cycles > 1
+            else ""
+        )
         + f"_lr_{cfg.optimizer_params.lr:.3f}"
         + f"_mom_{cfg.optimizer_params.momentum:.1f}"
         + f"_wd_{cfg.optimizer_params.weight_decay:.4f}"
@@ -241,8 +245,9 @@ def generate_cyclical_schedule(cfg: DictConfig):
     return epochs
 
 
-
-def display_training_info(config_info, optimizer_info, cycle_info=None, training_info=None):
+def display_training_info(
+    config_info, optimizer_info, cycle_info=None, training_info=None
+):
     console = Console()
 
     def create_wrapped_tree(title, info_dict):
@@ -331,11 +336,11 @@ def display_training_info(config_info, optimizer_info, cycle_info=None, training
             Layout(optimizer_panel, name="optimizer", ratio=1),
         )
     else:
-       experiment_config.split(
+        experiment_config.split(
             Layout(hardware_panel, name="hardware", ratio=1),
             Layout(training_panel, name="training", ratio=1),
             Layout(optimizer_panel, name="optimizer", ratio=1),
-        ) 
+        )
     experiment_config.update(
         Panel(
             experiment_config,
