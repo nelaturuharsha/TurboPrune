@@ -1,82 +1,101 @@
-from fastargs import Param, Section
-from fastargs.validation import And, OneOf
+from dataclasses import dataclass
+from typing import Literal, Optional
+from omegaconf import MISSING
 
 
-def get_current_params() -> None:
-    """Define the various parameters and their constraints with fastargs."""
-    Section("model_params", "model details").params(
-        model_name=Param(str, "model_choice", default="resnet18", required=True),
-        conv_type=Param(And(str, OneOf(["ConvMask"])), required=True),
-    )
-
-    Section("dataset", "dataset configuration").params(
-        dataset_name=Param(
-            And(str, OneOf(["CIFAR10", "CIFAR100", "ImageNet"])),
-            "Name of dataset",
-            required=True,
-        ),
-        num_classes=Param(
-            And(int, OneOf([10, 100, 1000])), "number of classes", required=True
-        ),
-        batch_size=Param(int, "batch size", default=256),
-        num_workers=Param(int, "num_workers", default=8),
-        data_root=Param(str, "path to betons", required=True),
-    )
-
-    Section("prune_params", "pruning configuration").params(
-        prune_rate=Param(float, "percentage of parameters to remove", required=True),
-        er_init=Param(float, "sparse init percentage/target", default=0.2),
-        er_method=Param(
-            And(str, OneOf(["er_erk", "er_balanced", "synflow", "snip", "just dont"])),
-            default="just dont",
-        ),
-        prune_method=Param(
-            And(
-                str, OneOf(["random_erk", "random_balanced", "synflow", "snip", "mag"])
-            ),
-            required=True,
-        ),
-        num_levels=Param(int, "number of pruning levels", required=True),
-    )
-
-    Section("experiment_params", "parameters to train model").params(
-        seed=Param(int, "seed", default=0),
-        base_dir=Param(str, "base directory", required=True, default="./experiments"),
-        epochs_per_level=Param(int, "number of epochs per level", required=True),
-        training_type=Param(And(str, OneOf(["imp", "wr", "lrr"])), required=True),
-        resume_level=Param(
-            int, "level to resume from -- 0 if starting afresh", default=0
-        ),
-        resume_expt_name=Param(str, "resume path"),
-    )
-
-    Section("optimizer", "data related stuff").params(
-        lr=Param(float, "learning rate", required=True),
-        momentum=Param(float, "momentum", default=0.9),
-        weight_decay=Param(float, "weight decay", default=1e-4),
-        warmup_epochs=Param(int, "warmup length", default=10),
-        scheduler_type=Param(
-            And(
-                str,
-                OneOf(
-                    [
-                        "MultiStepLRWarmup",
-                        "ImageNetLRDropsWarmup",
-                        "CosineLRWarmup",
-                        "TriangularSchedule",
-                    ]
-                ),
-            ),
-            required=True,
-        ),
-        lr_min=Param(float, "minimum learning rate for cosine", default=0.01),
-    )
-
-    Section("dist_params", "distributed parameters").params(
-        distributed=Param(bool, "use distributed training", default=True),
-        address=Param(str, "default address", default="localhost"),
-        port=Param(int, "default port", default=12350),
-    )
+@dataclass
+class DatasetConfig:
+    dataset_name: Literal["CIFAR10", "CIFAR100", "ImageNet"] = MISSING
+    data_root_dir: str = MISSING
+    total_batch_size: int = 512
+    num_workers: int = 16
+    gpu_workers: Optional[int] = 4
+    dataloader_type: Literal["torch", "ffcv", "webdataset"] = MISSING
 
 
-#
+@dataclass
+class ModelConfig:
+    model_name: str = MISSING
+    mask_layer_type: Literal["ConvMask", "LinearMask"] = MISSING
+    use_compile: bool = False
+
+
+@dataclass
+class PruneConfig:
+    prune_rate: float = MISSING
+    prune_method: Literal[
+        "er_erk",
+        "er_balanced",
+        "random_erk",
+        "random_balanced",
+        "synflow",
+        "snip",
+        "mag",
+        "just dont",
+    ] = MISSING
+    target_sparsity: float = MISSING
+    training_type: Literal["imp", "wr", "lrr", "at_init"] = MISSING
+
+
+@dataclass
+class ResumeExperimentConfig:
+    resume_level: int = MISSING
+    resume_expt_name: str = MISSING
+
+
+@dataclass
+class ExperimentConfig:
+    seed: int = 0
+    base_dir: str = "./experiments"
+
+    epochs_per_level: int = MISSING
+    training_precision: Literal["bfloat16", "float32"] = "bfloat16"
+
+    distributed: bool = False
+    resume_experiment: bool = False
+    resume_experiment_stuff: Optional[ResumeExperimentConfig] = None
+    wandb_project_name: str = "TurboPrune_runs"
+    imagenet_dataloader_type: Literal["ffcv", "webdataset"] = "ffcv"
+
+
+@dataclass
+class OptimizerConfig:
+    optimizer_name: Literal["SGD", "AdamW", "Shampoo", "Muon", "SOAP"] = MISSING
+    lr: float = MISSING
+    momentum: float = MISSING
+    weight_decay: float = MISSING
+    scheduler_type: Literal[
+        "MultiStepLRWarmup",
+        "ImageNetLRDropsWarmup",
+        "TriangularSchedule",
+        "ScheduleFree",
+        "TrapezoidalSchedule",
+        "OneCycleLR",
+    ] = MISSING
+    warmup_fraction: float = 0.2
+
+
+@dataclass
+class CyclicTrainingConfig:
+    num_cycles: int = 1
+    strategy: Literal[
+        "linear_increase",
+        "linear_decrease",
+        "exponential_decrease",
+        "exponential_increase",
+        "cyclic_peak",
+        "alternating",
+        "plateau",
+        "constant",
+    ] = "constant"
+
+
+@dataclass
+class MainConfig:
+    defaults: list[str] = MISSING
+    dataset_params: DatasetConfig = MISSING
+    model_params: ModelConfig = MISSING
+    pruning_params: PruneConfig = MISSING
+    experiment_params: ExperimentConfig = MISSING
+    optimizer_params: OptimizerConfig = MISSING
+    cyclic_training: CyclicTrainingConfig

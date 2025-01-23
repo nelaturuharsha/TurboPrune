@@ -1,0 +1,6 @@
+optimizer_name: SGD
+lr: 0.2
+momentum: 0.9
+weight_decay: 5e-4
+scheduler_type: TriangularSchedule
+warmup_fraction: 0.2

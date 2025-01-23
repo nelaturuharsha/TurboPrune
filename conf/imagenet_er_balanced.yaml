@@ -1,0 +1,9 @@
+defaults:
+  - _self_
+  - dataset_params: dp_imagenet_ffcv
+  - optimizer_params: sgd_imagenet
+  - pruning_params: pai_er_balanced
+  - experiment_params: ep_imagenet
+  - model_params: mp_resnet50
+  - cyclic_training: ct_no_cyclic
+

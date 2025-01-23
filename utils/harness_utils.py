@@ -1,55 +1,24 @@
-import torch
 import os
-import prettytable
-from utils.conv_type import ConvMask, Conv1dMask
-from datetime import datetime
 import uuid
+from datetime import datetime
+import yaml
+from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 import random
-import yaml
+import pandas as pd
 
-from utils.pruning_utils import PruningStuff
-from utils.dataset import CIFARLoader
+import torch
 
-from fastargs import get_current_config
-from fastargs.decorators import param
-from typing import Any, Dict, Optional, Tuple 
+from omegaconf import DictConfig
 
+from rich.console import Console, Group
+from rich.panel import Panel
+from rich.tree import Tree
+from rich.layout import Layout
+from rich.text import Text
 
-def reset_weights(
-    expt_dir: str, model: torch.nn.Module, training_type: str
-) -> torch.nn.Module:
-    """Reset (or don't) the weight to a given checkpoint based on the provided training type.
-
-    Args:
-        expt_dir (str): Directory of the experiment.
-        model (torch.nn.Module): The model to reset.
-        training_type (str): Type of training ('imp', 'wr', or 'lrr').
-
-    Returns:
-        torch.nn.Module: The model with reset weights.
-    """
-    if training_type == "imp":
-        original_dict = torch.load(
-            os.path.join(expt_dir, "checkpoints", "model_init.pt")
-        )
-    elif training_type == "wr":
-        original_dict = torch.load(
-            os.path.join(expt_dir, "checkpoints", "model_rewind.pt")
-        )
-    else:
-        print("probably LRR, aint nothing to do")
-        return model
-
-    original_weights = dict(
-        filter(lambda v: v[0].endswith((".weight", ".bias")), original_dict.items())
-    )
-    model_dict = model.state_dict()
-    model_dict.update(original_weights)
-    model.load_state_dict(model_dict)
-
-    return model
+import wandb
 
 
 def reset_optimizer(
@@ -77,185 +46,341 @@ def reset_optimizer(
     return optimizer
 
 
-def reset_only_weights(expt_dir: str, ckpt_name: str, model: torch.nn.Module) -> None:
-    """Reset only the weights of the model from a specified checkpoint.
-
-    Args:
-        expt_dir (str): Directory of the experiment.
-        ckpt_name (str): Checkpoint name.
-        model (torch.nn.Module): The model to reset.
-    """
-    original_dict = torch.load(os.path.join(expt_dir, "checkpoints", ckpt_name))
-    original_weights = dict(
-        filter(lambda v: v[0].endswith((".weight", ".bias")), original_dict.items())
-    )
-    model_dict = model.state_dict()
-    model_dict.update(original_weights)
-    model.load_state_dict(model_dict)
-
-
-def reset_only_masks(expt_dir: str, ckpt_name: str, model: torch.nn.Module) -> None:
-    """Reset only the masks of the model from a specified checkpoint.
-
-    Args:
-        expt_dir (str): Directory of the experiment.
-        ckpt_name (str): Checkpoint name.
-        model (torch.nn.Module): The model to reset.
-    """
-    original_dict = torch.load(os.path.join(expt_dir, "checkpoints", ckpt_name))
-    original_weights = dict(
-        filter(lambda v: v[0].endswith(".mask"), original_dict.items())
-    )
-    model_dict = model.state_dict()
-    model_dict.update(original_weights)
-    model.load_state_dict(model_dict)
-
-
-def compute_sparsity(tensor: torch.Tensor) -> Tuple[float, int, int]:
-    """Compute the sparsity of a given tensor. Sparsity = number of elements which are 0 in the mask.
-
-    Args:
-        tensor (torch.Tensor): The tensor to compute sparsity for.
-
-    Returns:
-        tuple: Sparsity, number of non-zero elements, and total elements.
-    """
-    remaining = tensor.sum().item()
-    total = tensor.numel()
-    sparsity = 1.0 - (remaining / total)
-    return sparsity, remaining, total
-
-
-def print_sparsity_info(model: torch.nn.Module, verbose: bool = True) -> float:
-    """Print and return the sparsity information of the model.
-
-    Args:
-        model (torch.nn.Module): The model to check.
-        verbose (bool, optional): Whether to print detailed sparsity info of each layer. Default is True.
-
-    Returns:
-        float: Overall sparsity of the model.
-    """
-    my_table = prettytable.PrettyTable()
-    my_table.field_names = ["Layer Name", "Layer Sparsity", "Density", "Non-zero/Total"]
-    total_params = 0
-    total_params_kept = 0
-
-    for name, layer in model.named_modules():
-        if isinstance(layer, (ConvMask, Conv1dMask)):
-            weight_mask = layer.mask
-            sparsity, remaining, total = compute_sparsity(weight_mask)
-            my_table.add_row([name, sparsity, 1 - sparsity, f"{remaining}/{total}"])
-            total_params += total
-            total_params_kept += remaining
-
-    overall_sparsity = 1 - (total_params_kept / total_params)
-
-    if verbose:
-        print(my_table)
-        print("-----------")
-        print(f"Overall Sparsity of All Layers: {overall_sparsity:.4f}")
-        print("-----------")
-
-    return overall_sparsity
-
-
-@param("experiment_params.base_dir")
-@param("experiment_params.resume_level")
-@param("experiment_params.resume_expt_name")
-def gen_expt_dir(
-    base_dir: str, resume_level: int, resume_expt_name: Optional[str] = None
-) -> str:
+def gen_expt_dir(cfg: DictConfig) -> Tuple[str, str]:
     """Create a new experiment directory and all the necessary subdirectories.
        If provided, instead of creating a new directory -- set the directory to the one provided.
 
     Args:
-        base_dir (str): Base directory for experiments.
-        resume_level (int): Level to resume from.
-        resume_expt_name (str, optional): Name of the experiment to resume from. Default is None.
+        cfg (DictConfig): Hydra config object.
 
     Returns:
-        str: Path to the experiment directory.
+        Tuple[str, str]: Prefix and path to the experiment directory.
     """
-    if resume_level != 0 and resume_expt_name:
-        expt_dir = os.path.join(base_dir, resume_expt_name)
-        print(f"Resuming from Level -- {resume_level}")
-    elif resume_level == 0 and resume_expt_name is None:
-        current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
-        unique_id = uuid.uuid4().hex[:6]
-        unique_name = f"experiment_{current_time}_{unique_id}"
-        expt_dir = os.path.join(base_dir, unique_name)
-        print(f"Creating this Folder {expt_dir}:)")
+    base_dir = cfg.experiment_params.base_dir
+    if cfg.pruning_params.training_type == "cyclic":
+        num_cycles = cfg.cyclic_training.num_cycles
     else:
-        raise AssertionError(
-            "Either start from scratch, or provide a path to the checkpoint :)"
+        num_cycles = 1
+    # Create prefix using f-string with config values
+    prefix = (
+        f"{cfg.dataset_params.dataset_name}"
+        f"_model_{cfg.model_params.model_name}"
+        f"_trainingtype_{cfg.pruning_params.training_type}"
+        f"_prunemethod_{cfg.pruning_params.prune_method}"
+        f"_target_{cfg.pruning_params.target_sparsity:.2f}"
+        f"_seed_{cfg.experiment_params.seed}"
+        f"_budget_{cfg.experiment_params.epochs_per_level}epochs"
+        + (
+            f"_cycles_{num_cycles}_strat_{cfg.cyclic_training.strategy}"
+            if num_cycles > 1
+            else ""
         )
+        + f"_lr_{cfg.optimizer_params.lr:.3f}"
+        + f"_mom_{cfg.optimizer_params.momentum:.1f}"
+        + f"_wd_{cfg.optimizer_params.weight_decay:.4f}"
+        + f"_sched_{cfg.optimizer_params.scheduler_type}"
+    )
 
-    if not os.path.exists(expt_dir):
-        os.makedirs(expt_dir)
-        os.makedirs(f"{expt_dir}/checkpoints")
-        os.makedirs(f"{expt_dir}/metrics")
-        os.makedirs(f"{expt_dir}/metrics/epochwise_metrics")
-        os.makedirs(f"{expt_dir}/artifacts/")
+    current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
+    unique_id = uuid.uuid4().hex[:6]
+    unique_name = f"{prefix}__{unique_id}__{current_time}"
+    expt_dir = os.path.join(base_dir, unique_name)
+    print(f"Creating this Folder {expt_dir} :)")
 
-    return expt_dir
+    os.makedirs(expt_dir, exist_ok=True)
+    for subdir in ["checkpoints", "metrics", "metrics/level_wise_metrics", "artifacts"]:
+        os.makedirs(os.path.join(expt_dir, subdir), exist_ok=True)
+
+    return prefix, expt_dir
 
 
-@param("experiment_params.seed")
-def set_seed(seed: int, is_deterministic: bool = False) -> None:
+def set_seed(cfg: DictConfig, is_deterministic: bool = False) -> None:
     """Set the random seed for reproducibility.
 
     Args:
-        seed (int): Seed value.
+        cfg (DictConfig): Hydra config object.
         is_deterministic (bool, optional): Whether to set deterministic behavior. Default is False.
     """
+    seed = cfg.experiment_params.seed
     np.random.seed(seed)
     random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
-    # When running on the CuDNN backend, two further options must be set
     if is_deterministic:
-        print("This ran")
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
         torch.use_deterministic_algorithms(True)
     # Set a fixed value for the hash seed
     os.environ["PYTHONHASHSEED"] = str(seed)
-    print(f"Random seed set as {seed}")
 
 
-@param("prune_params.prune_method")
-@param("prune_params.num_levels")
-@param("prune_params.prune_rate")
-def generate_densities(
-    prune_method: str, num_levels: int, prune_rate: float
-) -> list[float]:
-    """Generate a list of densities for pruning. The density is calculated as (1 - prune_rate) ^ i where i is the sparsity level.
-       For example, if prune_rate = 0.2 and the num_levels = 5, the densities will be [1.0, 0.8, 0.64, 0.512, 0.4096].
+def generate_densities(cfg: DictConfig, current_sparsity: float) -> list[float]:
+    """Generate a list of densities for pruning. The density is calculated as
+       (1 - prune_rate) ^ i multiplied by current_sparsity until target_sparsity is reached.
     Args:
-        prune_method (str): Method of pruning.
-        num_levels (int): Number of pruning levels.
-        prune_rate (float): Rate of pruning.
-
+        cfg (DictConfig): Hydra config object.
+        current_sparsity (float): The current density (1 - current_sparsity).
     Returns:
-        list[float]: List of densities for each level.
+        list[float]: List of densities until target sparsity is reached.
     """
-    densities = [(1 - prune_rate) ** i for i in range(num_levels)]
-    return densities
+    prune_method = cfg.pruning_params.prune_method
+    target_sparsity = cfg.pruning_params.target_sparsity
+
+    if prune_method in ["mag", "random_erk", "random_balanced"]:
+        prune_rate = cfg.pruning_params.prune_rate
+        densities = []
+        current_density = 1 - current_sparsity
+        target_density = 1 - target_sparsity
+        while current_density > target_density:
+            densities.append(current_density)
+            current_density *= 1 - prune_rate
+        if current_density <= target_density:
+            densities.append(current_density)
+        return densities
+    elif prune_method in ["er_erk", "er_balanced", "synflow", "snip"]:
+        return [1 - target_sparsity]
+    elif prune_method == "just dont":
+        return [1.0]
+    else:
+        raise ValueError(f"Unknown pruning method: {prune_method}")
 
 
-def save_config(expt_dir: str, config: Any) -> None:
+def save_config(expt_dir: str, cfg: DictConfig) -> None:
     """Save the experiment configuration to a YAML file in the experiment directory.
 
     Args:
         expt_dir (str): Directory of the experiment.
-        config (Any): Configuration to save.
+        config (DictConfig): Configuration to save.
     """
-    nested_dict: Dict[str, Dict[str, Any]] = {}
-    for (outer_key, inner_key), value in config.content.items():
-        if outer_key not in nested_dict:
-            nested_dict[outer_key] = {}
-        nested_dict[outer_key][inner_key] = value
-
     with open(os.path.join(expt_dir, "expt_config.yaml"), "w") as file:
-        yaml.dump(nested_dict, file, default_flow_style=False)
+        yaml.dump(cfg, file, default_flow_style=False)
+
+
+def generate_cyclical_schedule(cfg: DictConfig):
+    """
+    Generates a schedule of epochs per cycle based on the given strategy and total epoch budget.
+
+    Parameters:
+    - cfg (DictConfig): Hydra config object.
+    Returns:
+    - List[int]: A list of epochs for each cycle.
+    """
+    epochs_per_level = cfg.experiment_params.epochs_per_level
+    num_cycles = cfg.cyclic_training.num_cycles
+    strategy = cfg.cyclic_training.strategy
+
+    if num_cycles > 1:
+        if strategy == "linear_decrease":
+            step = epochs_per_level / (num_cycles * (num_cycles + 1) / 2)
+            epochs = [int(step * (num_cycles - i)) for i in range(num_cycles)]
+
+        elif strategy == "linear_increase":
+            step = epochs_per_level / (num_cycles * (num_cycles + 1) / 2)
+            epochs = [int(step * (i + 1)) for i in range(num_cycles)]
+
+        elif strategy == "exponential_decrease":
+            factor = 0.5 ** (1 / (num_cycles - 1))
+            total_factor = sum(factor**i for i in range(num_cycles))
+            epochs = [
+                int(epochs_per_level * (factor**i) / total_factor)
+                for i in range(num_cycles)
+            ]
+
+        elif strategy == "exponential_increase":
+            factor = 2 ** (1 / (num_cycles - 1))
+            total_factor = sum(factor**i for i in range(num_cycles))
+            epochs = [
+                int(epochs_per_level * (factor**i) / total_factor)
+                for i in range(num_cycles)
+            ]
+
+        elif strategy == "cyclic_peak":
+            mid_point = num_cycles // 2
+            increase_step = epochs_per_level / (mid_point * (mid_point + 1) / 2)
+            decrease_step = epochs_per_level / (
+                (num_cycles - mid_point) * (num_cycles - mid_point + 1) / 2
+            )
+            epochs = [int(increase_step * (i + 1)) for i in range(mid_point)]
+            epochs += [
+                int(decrease_step * (num_cycles - i))
+                for i in range(mid_point, num_cycles)
+            ]
+
+        elif strategy == "alternating":
+            high = epochs_per_level // (num_cycles // 2 + num_cycles % 2)
+            low = epochs_per_level // (2 * (num_cycles // 2 + num_cycles % 2))
+            epochs = [high if i % 2 == 0 else low for i in range(num_cycles)]
+
+        elif strategy == "plateau":
+            increase_cycles = num_cycles // 2
+            plateau_cycles = num_cycles - increase_cycles
+            increase_step = epochs_per_level / (
+                increase_cycles * (increase_cycles + 1) / 2
+            )
+            epochs = [int(increase_step * (i + 1)) for i in range(increase_cycles)]
+            epochs += [epochs_per_level // num_cycles for _ in range(plateau_cycles)]
+
+        elif strategy == "constant":
+            epochs = [epochs_per_level // num_cycles for _ in range(num_cycles)]
+    else:
+        epochs = [epochs_per_level]
+
+    current_total = sum(epochs)
+    if current_total > epochs_per_level:
+        scaling_factor = epochs_per_level / current_total
+        epochs = [int(epoch * scaling_factor) for epoch in epochs]
+
+        current_total = sum(epochs)
+        excess = current_total - epochs_per_level
+
+        if excess > 0:
+            reduction_per_epoch = excess // len(epochs)
+            remainder = excess % len(epochs)
+
+            epochs = [epoch - reduction_per_epoch for epoch in epochs]
+
+            for i in range(remainder):
+                epochs[i] -= 1
+
+    return epochs
+
+
+def display_training_info(
+    config_info, optimizer_info, cycle_info=None, training_info=None
+):
+    console = Console()
+
+    def create_wrapped_tree(title, info_dict):
+        tree = Tree(title)
+        for key, value in info_dict.items():
+            if "expt_dir" in key:
+                value = os.path.basename(value)
+            text = Text.from_markup(f"[bold cyan]{key.capitalize()}:[/bold cyan] ")
+            text.append(str(value), style="yellow")
+            tree.add(Group(text))
+        return tree
+
+    hardware_tree = create_wrapped_tree("Training Harness Configuration", config_info)
+    hardware_panel = Panel(
+        hardware_tree, title="Hardware Configuration", border_style="cyan"
+    )
+    if training_info is not None:
+        training_tree = create_wrapped_tree("Experiment Configuration", training_info)
+        training_panel = Panel(
+            training_tree, title="Training Configuration", border_style="cyan"
+        )
+
+    schedule_tree = Tree("Training Schedule")
+    if cycle_info is not None:
+        schedule_tree.add(
+            Group(
+                Text.from_markup(
+                    f"[bold cyan]Number of Cycles:[/bold cyan] [yellow]{cycle_info['Number of Cycles']}[/yellow]"
+                )
+            )
+        )
+        epochs_text = Text.from_markup(f"[bold cyan]Epochs per Cycle:[/bold cyan] ")
+        epochs_text.append(
+            ", ".join(map(str, cycle_info["Epochs per Cycle"])), style="yellow"
+        )
+        schedule_tree.add(Group(epochs_text))
+
+        schedule_tree.add(
+            Group(
+                Text.from_markup(
+                    f"[bold cyan]Total Training Length:[/bold cyan] [yellow]{cycle_info['Total Training Length']}[/yellow]"
+                )
+            )
+        )
+    schedule_panel = Panel(
+        schedule_tree, title="Overall Training Schedule", border_style="cyan"
+    )
+    if cycle_info is not None:
+        cycle_tree = Tree(f"Training Cycle {cycle_info['Training Cycle']}")
+        cycle_tree.add(
+            Group(
+                Text.from_markup(
+                    f"[bold cyan]Epochs this cycle:[/bold cyan] [yellow]{cycle_info['Epochs this cycle']}[/yellow]"
+                )
+            )
+        )
+        cycle_tree.add(
+            Group(
+                Text.from_markup(
+                    f"[bold cyan]Total epochs so far:[/bold cyan] [yellow]{cycle_info['Total epochs so far']}[/yellow]"
+                )
+            )
+        )
+        cycle_tree.add(
+            Group(
+                Text.from_markup(
+                    f"[bold cyan]Current Sparsity:[/bold cyan] [yellow]{cycle_info['Current Sparsity']}[/yellow]"
+                )
+            )
+        )
+        cycle_panel = Panel(
+            cycle_tree, title="Current Cycle Information", border_style="cyan"
+        )
+
+    optimizer_tree = create_wrapped_tree("Optimizer Configuration", optimizer_info)
+    optimizer_panel = Panel(
+        optimizer_tree, title="Optimizer Details", border_style="cyan"
+    )
+
+    experiment_config = Layout()
+    if cycle_info is not None:
+        experiment_config.split(
+            Layout(hardware_panel, name="hardware", ratio=1),
+            Layout(schedule_panel, name="schedule", ratio=1),
+            Layout(cycle_panel, name="cycle", ratio=1),
+            Layout(optimizer_panel, name="optimizer", ratio=1),
+        )
+    else:
+        experiment_config.split(
+            Layout(hardware_panel, name="hardware", ratio=1),
+            Layout(training_panel, name="training", ratio=1),
+            Layout(optimizer_panel, name="optimizer", ratio=1),
+        )
+    experiment_config.update(
+        Panel(
+            experiment_config,
+            title="Experiment Configuration",
+            border_style="bold magenta",
+        )
+    )
+    console.print(experiment_config)
+
+
+def save_model(model, save_path, distributed: bool):
+    if distributed and hasattr(model, "_orig_mod"):
+        model_to_save = model._orig_mod.module.model
+    elif distributed:
+        model_to_save = model.module.model
+    elif hasattr(model, "_orig_mod"):
+        model_to_save = model._orig_mod.model
+    else:
+        model_to_save = model.model
+
+    torch.save(model_to_save.state_dict(), save_path)
+    print(f"Model saved to {save_path}")
+
+
+def resume_experiment(cfg: DictConfig, expt_dir: str):
+    resume_level = cfg.experiment_params.resume_experiment_stuff.resume_level
+    resume_expt_name = cfg.experiment_params.resume_experiment_stuff.resume_expt_name
+    training_type = cfg.pruning_params.training_type
+
+    if resume_level != 0 and resume_expt_name:
+        expt_dir = os.path.join(expt_dir, resume_expt_name)
+        prefix = os.path.basename(expt_dir)
+        print(f"Resuming from Level -- {resume_level}")
+
+        if training_type in ["imp", "wr", "lrr"]:
+            checkpoint_path = os.path.join(
+                expt_dir, "checkpoints", f"model_level_{resume_level-1}.pt"
+            )
+            assert os.path.exists(
+                checkpoint_path
+            ), f"Previous level checkpoint not found at {checkpoint_path}"
+
+    return prefix, expt_dir

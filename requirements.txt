@@ -1,7 +1,13 @@
-prettytable
 pandas
 numpy
 pyyaml
 tqdm
 torch
 torchvision
+schedulefree
+pyhessian
+wandb
+torchmetrics
+rich
+timm
+hydra-core
