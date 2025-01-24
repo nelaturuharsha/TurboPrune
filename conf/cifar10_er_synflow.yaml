@@ -1,0 +1,8 @@
+defaults:
+  - _self_
+  - dataset_params: dp_cifar10
+  - optimizer_params: sgd_cifar10
+  - pruning_params: pai_synflow
+  - experiment_params: ep_cifar10
+  - model_params: mp_resnet18
+

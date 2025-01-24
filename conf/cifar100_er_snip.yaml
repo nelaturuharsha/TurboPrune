@@ -1,0 +1,7 @@
+defaults:
+  - _self_
+  - dataset_params: dp_cifar100
+  - optimizer_params: sgd_cifar100
+  - pruning_params: pai_er_snip
+  - experiment_params: ep_cifar100
+  - model_params: mp_resnet50
