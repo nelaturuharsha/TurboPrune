@@ -160,6 +160,8 @@ cython_debug/
 #.idea/
 #
 experiments/
+experiments*
+experiments_*/
 torch_compile_debug
 jobs/
 job-*

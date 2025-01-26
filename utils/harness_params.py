@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal, Optional
 from omegaconf import MISSING
 
@@ -35,7 +35,7 @@ class PruneConfig:
     ] = MISSING
     target_sparsity: float = MISSING
     training_type: Literal["imp", "wr", "lrr", "at_init"] = MISSING
-
+    rewind_epoch: Optional[int] = field(default=None)
 
 @dataclass
 class ResumeExperimentConfig:

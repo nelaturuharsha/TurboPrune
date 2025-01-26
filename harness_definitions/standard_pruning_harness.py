@@ -190,12 +190,12 @@ class PruningHarness(BaseHarness):
         if self.gpu_id == 0 and level == 0:
             save_model(
                 self.model,
-                os.path.join(self.expt_dir, "checkpoints", "model_rewind.pt"),
+                os.path.join(self.expt_dir, "checkpoints", "model_initpt"),
                 distributed=self.distributed,
             )
             torch.save(
                 self.optimizer.state_dict(),
-                os.path.join(self.expt_dir, "artifacts", "optimizer_rewind.pt"),
+                os.path.join(self.expt_dir, "artifacts", "optimizer_init.pt"),
             )
 
         for epoch in range(epochs_per_level):
@@ -208,6 +208,19 @@ class PruningHarness(BaseHarness):
 
             train_metrics = self.train_epoch()
             test_metrics = self.test()
+
+            save_rewind_checkpoint = getattr(self.cfg.pruning_params, 'rewind_epoch', None) == epoch and level == 0
+
+            if self.gpu_id == 0 and save_rewind_checkpoint:
+                save_model(
+                    self.model,
+                    os.path.join(self.expt_dir, "checkpoints", "model_rewind.pt"),
+                    distributed=self.distributed,
+                )
+                torch.save(
+                    self.optimizer.state_dict(),
+                    os.path.join(self.expt_dir, "artifacts", "optimizer_rewind.pt"),
+                )
 
             metrics = {
                 "epoch": int(self.epoch_counter),
