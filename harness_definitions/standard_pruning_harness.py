@@ -190,7 +190,7 @@ class PruningHarness(BaseHarness):
         if self.gpu_id == 0 and level == 0:
             save_model(
                 self.model,
-                os.path.join(self.expt_dir, "checkpoints", "model_initpt"),
+                os.path.join(self.expt_dir, "checkpoints", "model_init.pt"),
                 distributed=self.distributed,
             )
             torch.save(
